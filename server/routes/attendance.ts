@@ -3,6 +3,7 @@ import {
   db,
   calculateHaversineDistance,
   calculateEuclideanDistance,
+  getCampusLocalDate,
   AttendanceEvent,
 } from '../db';
 import { getAuthenticatedUser } from './auth';
@@ -165,7 +166,7 @@ router.post('/submit', (req: Request, res: Response) => {
   }
 
   const payload: SubmissionPayload = req.body;
-  const eventDate = new Date().toISOString().split('T')[0];
+  const eventDate = getCampusLocalDate();
   const checkpointType = payload.checkpointType || 'entry';
   const sessionType = payload.sessionType || (user.role === 'staff' ? 'daily_staff' : 'class_session');
 
@@ -228,7 +229,7 @@ router.get('/me', (req: Request, res: Response) => {
   }
 
   const records = db.getAttendanceByUser(user.id);
-  const today = new Date().toISOString().split('T')[0];
+  const today = getCampusLocalDate();
   const todayRecords = records.filter((r) => r.eventDate === today);
 
   return res.json({
@@ -296,7 +297,7 @@ router.post('/sync', (req: Request, res: Response) => {
 
     const eventDate = item.capturedAt
       ? item.capturedAt.split('T')[0]
-      : new Date().toISOString().split('T')[0];
+      : getCampusLocalDate();
     const checkpointType = item.checkpointType || 'entry';
     const sessionType = item.sessionType || (itemUser.role === 'staff' ? 'daily_staff' : 'class_session');
 
@@ -451,6 +452,17 @@ router.post('/verify-personal-attendance', (req: Request, res: Response) => {
     });
   }
 
+  // Reject fabricated, NaN, uniform, or flat vectors
+  const hasInvalid = faceDescriptor.some((n) => typeof n !== 'number' || !Number.isFinite(n) || isNaN(n));
+  const allIdentical = faceDescriptor.every((v) => Math.abs(v - faceDescriptor[0]) < 1e-7);
+  const vectorNorm = Math.sqrt(faceDescriptor.reduce((sum, v) => sum + v * v, 0));
+  if (hasInvalid || allIdentical || vectorNorm === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Fabricated or invalid biometric vector rejected. Genuine model capture required.',
+    });
+  }
+
   // 4. Biometric Face Distance Matching
   const faceDistance = calculateEuclideanDistance(enrollment.descriptor, faceDescriptor);
   if (faceDistance > FACE_MATCH_THRESHOLD) {
@@ -473,10 +485,10 @@ router.post('/verify-personal-attendance', (req: Request, res: Response) => {
     });
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getCampusLocalDate();
 
   // 6. Check existing personal attendance for today (Duplicate Prevention)
-  const existingRecord = db.getTodayPersonalAttendance(user.id);
+  const existingRecord = db.getTodayPersonalAttendance(user.id, today);
   if (existingRecord) {
     db.addAuditLog(user.id, 'PERSONAL_ATTENDANCE_CONFIRMED_SESSION', 'SUCCESS', {
       attendanceId: existingRecord.id,

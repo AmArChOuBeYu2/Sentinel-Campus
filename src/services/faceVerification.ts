@@ -65,8 +65,8 @@ class FaceVerificationService {
         console.log('[FaceAPI] All models loaded successfully');
         return true;
       } catch (err) {
-        console.warn('[FaceAPI] Failed to load official weights, using lightweight fallback descriptor generator:', err);
-        this.modelsLoaded = true; // allow fallback operation
+        console.error('[FaceAPI] Failed to load official weights:', err);
+        this.modelsLoaded = false;
         return false;
       }
     })();
@@ -165,37 +165,11 @@ class FaceVerificationService {
         message: 'Face verified in view.',
       };
     } catch (err) {
-      console.warn('[FaceAPI] Real-time inference fallback:', err);
-      // Fallback descriptor extraction for environments without WebGL hardware acceleration
-      const canvas = document.createElement('canvas');
-      canvas.width = 128;
-      canvas.height = 128;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, 128, 128);
-        const imgData = ctx.getImageData(0, 0, 128, 128);
-        // Generate pseudo-consistent 128-d hash representation based on facial pixel regions
-        const descriptor: number[] = [];
-        for (let i = 0; i < 128; i++) {
-          let sum = 0;
-          for (let j = 0; j < 128; j++) {
-            sum += imgData.data[(i * 128 + j) * 4];
-          }
-          descriptor.push((sum / 128 / 255) * 0.2);
-        }
-        return {
-          detected: true,
-          score: 0.92,
-          descriptor,
-          livenessPassed: true,
-          message: 'Face frame captured (Fallback Vision Kernel)',
-        };
-      }
-
+      console.error('[FaceAPI] Real-time inference error:', err);
       return {
         detected: false,
         score: 0,
-        message: 'Face verification processing failed: ' + String(err),
+        message: 'Face verification inference failed: ' + (err instanceof Error ? err.message : String(err)),
       };
     }
   }

@@ -20,8 +20,10 @@ export interface UserProfile {
   secondaryEmail?: string;
   semester?: string;
   section?: string;
-  referenceImage?: string;
   enrollmentNote?: string;
+  credentialStatus?: 'verified' | 'provisional_pending_configuration';
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
 }
 
 export interface BiometricEnrollment {
@@ -213,28 +215,21 @@ export function calculateEuclideanDistance(vecA: number[], vecB: number[]): numb
   return Math.sqrt(sum);
 }
 
-// Deterministic 128-dimensional biometric descriptor generator for reference profiles
-export function generateDeterministicDescriptor(seed: string): number[] {
-  const hash = crypto.createHash('sha256').update(seed).digest();
-  const vector: number[] = [];
-  for (let i = 0; i < 128; i++) {
-    const b = hash[i % hash.length];
-    const val = Math.sin((b + i * 5) * 0.12) * 0.12 + Math.cos((b * 3 + i) * 0.08) * 0.05;
-    vector.push(Number(val.toFixed(6)));
-  }
-  return vector;
+// Format current date in campus-local timezone (Jaipur, India: Asia/Kolkata)
+export function getCampusLocalDate(): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return formatter.format(new Date());
 }
 
 // Initial seed data with the five authorized team member profiles
 function getInitialSeedData(): DatabaseSchema {
-  const today = new Date().toISOString().split('T')[0];
-
-  const krishnaDescriptor = generateDeterministicDescriptor('krishna_jha_student_sc_stu_2026_0001');
-  const sudhanshuDescriptor = generateDeterministicDescriptor('sudhanshu_kumar_staff_sc_sta_2026_0001');
-  const chetanDescriptor = generateDeterministicDescriptor('chetan_staff_sc_sta_2026_0002');
-  const staff5Descriptor = generateDeterministicDescriptor('staff_member_5_sc_sta_2026_0003');
-
   const staff5Name = process.env.CONFIGURABLE_STAFF_NAME || 'Campus Staff Specialist';
+  const today = getCampusLocalDate();
 
   return {
     campusConfig: {
@@ -252,123 +247,104 @@ function getInitialSeedData(): DatabaseSchema {
       {
         id: 'usr_stu_0001',
         email: 'krishna.jha@skit.ac.in',
-        phone: '+91 98765 43210',
+        phone: '',
         fullName: 'Krishna Jha',
         role: 'student',
         department: 'B.Tech Computer Science & Engineering',
         identifierCode: 'SC-STU-2026-0001',
         semester: 'Semester 6',
         section: 'Sec-B',
-        referenceImage: '/reference-images/krishna.jpeg',
+        credentialStatus: 'provisional_pending_configuration',
+        emailVerified: false,
+        phoneVerified: false,
         isActive: true,
-        isEnrolled: true,
+        isEnrolled: false,
+        enrollmentNote: 'Biometric profile pending genuine live enrollment. Genuine camera capture required before attendance.',
         createdAt: '2026-01-20T10:15:00Z',
       },
       {
         id: 'usr_tch_0001',
         email: 'amar.choubey@skit.ac.in',
-        phone: '+91 98765 11111',
+        phone: '',
         fullName: 'Amar Choubey',
         role: 'teacher',
         department: 'Computer Science & Engineering',
         identifierCode: 'SC-TCH-2026-0001',
-        referenceImage: '/reference-images/amar.png',
         secondaryEmail: 'httpsamar96@gmail.com',
+        credentialStatus: 'verified', // Verified via real Resend email OTP
+        emailVerified: true,
+        phoneVerified: false,
         isActive: true,
-        isEnrolled: false, // Requirement 1: AI-generated reference supplied; requires genuine live enrollment capture
-        enrollmentNote: 'Reference image appears AI-generated (Amar.png). Genuine live biometric enrollment capture required.',
+        isEnrolled: false,
+        enrollmentNote: 'Reference image is AI-generated (Amar.png). Ineligible for biometric enrollment until genuine live enrollment is completed.',
         createdAt: '2026-01-15T08:00:00Z',
       },
       {
         id: 'usr_sta_0001',
         email: 'sudhanshu.kumar@skit.ac.in',
-        phone: '+91 98765 22222',
+        phone: '',
         fullName: 'Sudhanshu Kumar',
         role: 'staff',
         department: 'Academic Administration & Lab Tech',
         identifierCode: 'SC-STA-2026-0001',
-        referenceImage: '/reference-images/sudhanshu.jpeg',
+        credentialStatus: 'provisional_pending_configuration',
+        emailVerified: false,
+        phoneVerified: false,
         isActive: true,
-        isEnrolled: true,
+        isEnrolled: false,
+        enrollmentNote: 'Biometric profile pending genuine live enrollment. Genuine camera capture required before attendance.',
         createdAt: '2026-02-01T09:30:00Z',
       },
       {
         id: 'usr_sta_0002',
         email: 'chetan@skit.ac.in',
-        phone: '+91 98765 33333',
+        phone: '',
         fullName: 'Chetan',
         role: 'staff',
         department: 'Facilities & Campus IT Support',
         identifierCode: 'SC-STA-2026-0002',
-        referenceImage: '/reference-images/chetan.jpeg',
+        credentialStatus: 'provisional_pending_configuration',
+        emailVerified: false,
+        phoneVerified: false,
         isActive: true,
-        isEnrolled: true,
+        isEnrolled: false,
+        enrollmentNote: 'Biometric profile pending genuine live enrollment. Genuine camera capture required before attendance.',
         createdAt: '2026-02-05T10:00:00Z',
       },
       {
         id: 'usr_sta_0003',
         email: 'staff.operations@skit.ac.in',
-        phone: '+91 98765 44444',
+        phone: '',
         fullName: staff5Name,
         role: 'staff',
         department: 'Campus Operations & Security',
         identifierCode: 'SC-STA-2026-0003',
-        referenceImage: '/reference-images/staff5.jpeg',
+        credentialStatus: 'provisional_pending_configuration',
+        emailVerified: false,
+        phoneVerified: false,
         isActive: true,
-        isEnrolled: true,
+        isEnrolled: false,
+        enrollmentNote: 'Biometric profile pending genuine live enrollment. Name and credentials pending manual configuration.',
         createdAt: '2026-02-10T11:00:00Z',
       },
       {
         id: 'usr_adm_0001',
         email: 'dean.acad@skit.ac.in',
-        phone: '+91 98765 00000',
+        phone: '',
         fullName: 'Prof. Ramesh K. Agarwal (Dean)',
         role: 'admin',
         department: 'Academic Affairs & Campus Security',
         identifierCode: 'SC-ADM-2026-0001',
+        credentialStatus: 'provisional_pending_configuration',
+        emailVerified: false,
+        phoneVerified: false,
         isActive: true,
-        isEnrolled: true,
+        isEnrolled: false,
+        enrollmentNote: 'Administrative supervisor account. Personal attendance gate exempt.',
         createdAt: '2026-01-01T00:00:00Z',
       },
     ],
-    enrollments: [
-      {
-        id: 'enr_stu_0001',
-        userId: 'usr_stu_0001',
-        descriptor: krishnaDescriptor,
-        consentGiven: true,
-        consentStatement: 'Informed biometric consent granted for Krishna Jha (Student) attendance.',
-        enrolledAt: '2026-01-20T10:20:00Z',
-        isActive: true,
-      },
-      {
-        id: 'enr_sta_0001',
-        userId: 'usr_sta_0001',
-        descriptor: sudhanshuDescriptor,
-        consentGiven: true,
-        consentStatement: 'Informed biometric consent granted for Sudhanshu Kumar (Staff) attendance.',
-        enrolledAt: '2026-02-01T09:35:00Z',
-        isActive: true,
-      },
-      {
-        id: 'enr_sta_0002',
-        userId: 'usr_sta_0002',
-        descriptor: chetanDescriptor,
-        consentGiven: true,
-        consentStatement: 'Informed biometric consent granted for Chetan (Staff) attendance.',
-        enrolledAt: '2026-02-05T10:05:00Z',
-        isActive: true,
-      },
-      {
-        id: 'enr_sta_0003',
-        userId: 'usr_sta_0003',
-        descriptor: staff5Descriptor,
-        consentGiven: true,
-        consentStatement: 'Informed biometric consent granted for Campus Staff 5 attendance.',
-        enrolledAt: '2026-02-10T11:05:00Z',
-        isActive: true,
-      },
-    ],
+    enrollments: [],
     qrSessions: [],
     manualReviews: [],
     classes: [
@@ -570,35 +546,34 @@ class Database {
         if (!parsed.notices) parsed.notices = [];
         if (!parsed.manualReviews) parsed.manualReviews = [];
 
+        // Prune legacy synthetic or unverified test enrollments
+        parsed.enrollments = (parsed.enrollments || []).filter(
+          (e: any) => !['enr_stu_0001', 'enr_tch_0001', 'enr_sta_0001', 'enr_sta_0002', 'enr_sta_0003'].includes(e.id)
+        );
+
         // Synchronize and verify the 5 authorized team members
         const seed = getInitialSeedData();
         for (const seedUser of seed.users) {
           const existingIdx = parsed.users.findIndex((u: any) => u.id === seedUser.id);
+          const hasRealEnrollment = parsed.enrollments.some((e: any) => e.userId === seedUser.id && e.isActive);
           if (existingIdx !== -1) {
             parsed.users[existingIdx] = {
               ...parsed.users[existingIdx],
               fullName: seedUser.fullName,
               role: seedUser.role,
               email: seedUser.email,
-              referenceImage: seedUser.referenceImage,
+              phone: seedUser.phone,
               identifierCode: seedUser.identifierCode,
               secondaryEmail: seedUser.secondaryEmail,
-              isEnrolled: seedUser.isEnrolled,
-              enrollmentNote: seedUser.enrollmentNote,
+              credentialStatus: seedUser.credentialStatus,
+              emailVerified: seedUser.emailVerified,
+              phoneVerified: seedUser.phoneVerified,
+              isEnrolled: hasRealEnrollment,
+              enrollmentNote: hasRealEnrollment ? undefined : seedUser.enrollmentNote,
             };
+            delete (parsed.users[existingIdx] as any).referenceImage;
           } else {
             parsed.users.push(seedUser);
-          }
-        }
-
-        // Synchronize reference enrollments for enrolled members
-        for (const seedEnrollment of seed.enrollments) {
-          const existingEnr = parsed.enrollments.find((e: any) => e.userId === seedEnrollment.userId);
-          if (!existingEnr) {
-            parsed.enrollments.push(seedEnrollment);
-          } else {
-            existingEnr.descriptor = seedEnrollment.descriptor;
-            existingEnr.isActive = true;
           }
         }
 
@@ -705,11 +680,12 @@ class Database {
 
   deleteEnrollment(userId: string): boolean {
     let deleted = false;
-    this.data.enrollments.forEach((e) => {
-      if (e.userId === userId && e.isActive) {
-        e.isActive = false;
+    this.data.enrollments = this.data.enrollments.filter((e) => {
+      if (e.userId === userId) {
         deleted = true;
+        return false;
       }
+      return true;
     });
     if (deleted) {
       this.updateUser(userId, { isEnrolled: false });
@@ -717,6 +693,10 @@ class Database {
       this.save(this.data);
     }
     return deleted;
+  }
+
+  resetEnrollment(userId: string): boolean {
+    return this.deleteEnrollment(userId);
   }
 
   // --- Campus Config ---
@@ -1100,7 +1080,7 @@ class Database {
     rev.adminNotes = adminNotes;
 
     if (approved) {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getCampusLocalDate();
       const user = this.getUserById(rev.userId);
       if (user) {
         this.recordAttendance({
@@ -1134,8 +1114,8 @@ class Database {
   }
 
   // --- Personal Attendance Gate ---
-  hasConfirmedPersonalAttendanceToday(userId: string): boolean {
-    const today = new Date().toISOString().split('T')[0];
+  hasConfirmedPersonalAttendanceToday(userId: string, dateOverride?: string): boolean {
+    const today = dateOverride || getCampusLocalDate();
     return this.data.attendance.some(
       (a) =>
         a.userId === userId &&
@@ -1145,8 +1125,8 @@ class Database {
     );
   }
 
-  getTodayPersonalAttendance(userId: string): AttendanceEvent | undefined {
-    const today = new Date().toISOString().split('T')[0];
+  getTodayPersonalAttendance(userId: string, dateOverride?: string): AttendanceEvent | undefined {
+    const today = dateOverride || getCampusLocalDate();
     return this.data.attendance.find(
       (a) =>
         a.userId === userId &&

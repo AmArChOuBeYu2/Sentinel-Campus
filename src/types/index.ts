@@ -15,8 +15,10 @@ export interface UserProfile {
   secondaryEmail?: string;
   semester?: string;
   section?: string;
-  referenceImage?: string;
   enrollmentNote?: string;
+  credentialStatus?: 'verified' | 'provisional_pending_configuration';
+  emailVerified?: boolean;
+  phoneVerified?: boolean;
 }
 
 export interface CampusConfig {

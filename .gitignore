@@ -22,6 +22,14 @@ dist-ssr
 server/data/*.json
 !server/data/.gitkeep
 
+# Private Biometric Data, Face Embeddings & Reference Images (Access-Controlled, Never Tracked)
+public/reference-images/
+public/reference-images/*
+private-enrollment-storage/
+storage/
+storage/**
+uploads/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -32,3 +40,4 @@ server/data/*.json
 *.njsproj
 *.sln
 *.sw?
+

@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { db } from '../db';
+import { db, getCampusLocalDate } from '../db';
 import { getAuthenticatedUser } from './auth';
 
 const router = Router();
@@ -12,7 +12,7 @@ router.get('/current', (req: Request, res: Response) => {
   }
 
   const classes = db.getClasses();
-  const today = new Date().toISOString().split('T')[0];
+  const today = getCampusLocalDate();
 
   const userAttendance = db.getAttendanceByUser(user.id).filter((a) => a.eventDate === today);
 
@@ -92,7 +92,7 @@ router.post('/:id/presence-key', (req: Request, res: Response) => {
 // GET /api/classes/:id/roster - Get live roster & attendance counts for teacher
 router.get('/:id/roster', (req: Request, res: Response) => {
   const { id } = req.params;
-  const today = new Date().toISOString().split('T')[0];
+  const today = getCampusLocalDate();
 
   const cls = db.getClassById(id);
   if (!cls) {
@@ -249,7 +249,7 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
   const startTime = Date.now();
   const matchResult = db.matchStudentFace(faceDescriptor);
   const processingTimeMs = Date.now() - startTime;
-  const today = new Date().toISOString().split('T')[0];
+  const today = getCampusLocalDate();
 
   // If face matched
   if (matchResult.status === 'confirmed' && matchResult.match) {

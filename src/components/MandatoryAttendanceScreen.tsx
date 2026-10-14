@@ -287,8 +287,8 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
         <div className="bg-slate-800/80 backdrop-blur rounded-2xl p-4 border border-slate-700/80 mb-4 flex items-center justify-between shadow-xl">
           <div className="flex items-center space-x-3">
             <div className="w-12 h-12 rounded-full overflow-hidden bg-slate-700 border-2 border-slate-600 flex items-center justify-center">
-              {user.referenceImage ? (
-                <img src={user.referenceImage} alt={user.fullName} className="w-full h-full object-cover" />
+              {user.avatarUrl ? (
+                <img src={user.avatarUrl} alt={user.fullName} className="w-full h-full object-cover" />
               ) : (
                 <span className="text-base font-bold text-slate-300">{user.fullName.charAt(0)}</span>
               )}

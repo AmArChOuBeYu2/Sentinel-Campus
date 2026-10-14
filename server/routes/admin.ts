@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { db } from '../db';
+import { db, getCampusLocalDate } from '../db';
 import { getAuthenticatedUser } from './auth';
 
 const router = Router();
@@ -18,7 +18,7 @@ function requireAdmin(req: Request, res: Response, next: () => void) {
 
 // GET /api/admin/overview
 router.get('/overview', requireAdmin, (req: Request, res: Response) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = getCampusLocalDate();
   const allUsers = db.getUsers();
   const allAttendance = db.getAttendance();
 
@@ -124,7 +124,7 @@ router.get('/attendance/export', requireAdmin, (req: Request, res: Response) => 
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename=sentinel_attendance_${new Date().toISOString().split('T')[0]}.csv`
+    `attachment; filename=sentinel_attendance_${getCampusLocalDate()}.csv`
   );
   return res.send(csvContent);
 });

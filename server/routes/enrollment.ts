@@ -35,12 +35,15 @@ router.post('/', (req: Request, res: Response) => {
     });
   }
 
-  // Validate values in descriptor are real numbers
-  const hasInvalidValues = descriptor.some((n) => typeof n !== 'number' || isNaN(n));
-  if (hasInvalidValues) {
+  // Validate values in descriptor are real finite numbers
+  const hasInvalidValues = descriptor.some((n) => typeof n !== 'number' || !Number.isFinite(n) || isNaN(n));
+  const allIdentical = descriptor.every((v) => Math.abs(v - descriptor[0]) < 1e-7);
+  const vectorMagnitude = Math.sqrt(descriptor.reduce((sum, v) => sum + v * v, 0));
+
+  if (hasInvalidValues || allIdentical || vectorMagnitude === 0) {
     return res.status(400).json({
       success: false,
-      error: 'Corrupted biometric vector. Numerical values required.',
+      error: 'Fabricated or invalid biometric embedding rejected. Genuine model capture required.',
     });
   }
 
