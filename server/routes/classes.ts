@@ -223,6 +223,57 @@ router.get('/qr-session/:token', (req: Request, res: Response) => {
   });
 });
 
+function validateThumbnail(thumbnailUrl: unknown): { valid: boolean; error?: string } {
+  if (!thumbnailUrl) return { valid: true };
+  if (typeof thumbnailUrl !== 'string') {
+    return { valid: false, error: 'Thumbnail must be a valid base64 data string.' };
+  }
+  // Enforce payload limit: 350,000 base64 chars (~250 KB) to prevent memory exhaustion
+  if (thumbnailUrl.length > 350000) {
+    return { valid: false, error: 'Thumbnail payload exceeds maximum allowed size (250KB limit).' };
+  }
+  // Enforce valid MIME image data URL (JPEG/PNG only)
+  if (!thumbnailUrl.startsWith('data:image/jpeg;base64,') && !thumbnailUrl.startsWith('data:image/png;base64,')) {
+    return { valid: false, error: 'Thumbnail must be a valid JPEG or PNG data URL.' };
+  }
+  return { valid: true };
+}
+
+function validateDescriptorIntegrity(descriptor: unknown): { valid: boolean; error?: string } {
+  if (!descriptor || !Array.isArray(descriptor) || descriptor.length !== 128) {
+    return { valid: false, error: 'Valid 128-d face descriptor embedding required from live camera capture.' };
+  }
+
+  let sumSquares = 0;
+  const firstVal = descriptor[0];
+  let allEqual = true;
+
+  for (let i = 0; i < 128; i++) {
+    const v = descriptor[i];
+    if (typeof v !== 'number' || isNaN(v) || !isFinite(v)) {
+      return { valid: false, error: 'Corrupted face descriptor: contains non-numeric, NaN, or non-finite values.' };
+    }
+    if (Math.abs(v) > 2.0) {
+      return { valid: false, error: 'Corrupted face descriptor: component value exceeds plausible biometric range [-2.0, 2.0].' };
+    }
+    if (v !== firstVal) {
+      allEqual = false;
+    }
+    sumSquares += v * v;
+  }
+
+  if (allEqual) {
+    return { valid: false, error: 'Fabricated uniform flat vector rejected by biometric integrity checks.' };
+  }
+
+  const magnitude = Math.sqrt(sumSquares);
+  if (magnitude < 0.3 || magnitude > 2.0) {
+    return { valid: false, error: `Fabricated or unpopulated vector: magnitude (${magnitude.toFixed(2)}) is outside plausible face embedding range [0.3, 2.0].` };
+  }
+
+  return { valid: true };
+}
+
 // POST /api/classes/qr-session/:token/capture - Teacher captures student from mobile camera
 router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
@@ -239,6 +290,11 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
 
   // Confirm teacher authorization
   if (user.role === 'teacher' && session.teacherId !== user.id && user.role !== 'admin') {
+    db.addAuditLog(user.id, 'UNAUTHORIZED_CLASS_CAPTURE_ATTEMPT', 'WARNING', {
+      token,
+      attemptedTeacherId: user.id,
+      sessionTeacherId: session.teacherId,
+    });
     return res.status(403).json({
       success: false,
       error: 'Unauthorized: This classroom session belongs to another instructor.',
@@ -248,6 +304,7 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
   // Verify 5-minute expiration
   const now = new Date();
   if (now.toISOString() > session.expiresAt) {
+    session.isActive = false;
     return res.status(410).json({
       success: false,
       error: 'QR capture session has expired (5-minute window elapsed).',
@@ -256,26 +313,31 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
 
   const { faceDescriptor, thumbnailUrl } = req.body;
 
-  if (!faceDescriptor || !Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
+  // Zero-Trust Check 1: Validate descriptor vector format, norm and integrity
+  const descriptorCheck = validateDescriptorIntegrity(faceDescriptor);
+  if (!descriptorCheck.valid) {
+    db.addAuditLog(user.id, 'BIOMETRIC_DESCRIPTOR_CORRUPTED', 'WARNING', {
+      token,
+      error: descriptorCheck.error,
+    });
     return res.status(400).json({
       success: false,
-      error: 'Valid 128-d face descriptor embedding required from live camera capture.',
+      error: descriptorCheck.error,
     });
   }
 
-  // Biometric integrity check: reject non-numbers, NaN, Infinity, all-zeros, flat vectors
-  const isCorrupted =
-    faceDescriptor.some((v) => isNaN(v) || !isFinite(v)) ||
-    faceDescriptor.every((v) => v === faceDescriptor[0]) ||
-    faceDescriptor.every((v) => v === 0);
-
-  if (isCorrupted) {
+  // Zero-Trust Check 2: Validate thumbnail payload format and payload limits
+  const thumbnailCheck = validateThumbnail(thumbnailUrl);
+  if (!thumbnailCheck.valid) {
     return res.status(400).json({
       success: false,
-      error: 'Corrupted or fabricated face descriptor rejected by biometric integrity checks.',
+      error: thumbnailCheck.error,
     });
   }
 
+  // Zero-Trust Check 3: Zero-trust client identity isolation
+  // Ignore any client-sent identity assertions (studentId, matchedStudent, matchSuccess)
+  // Identity is strictly and independently computed server-side via Euclidean distance matching.
   const startTime = Date.now();
   const matchResult = db.matchStudentFace(faceDescriptor);
   const processingTimeMs = Date.now() - startTime;

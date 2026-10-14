@@ -551,6 +551,16 @@ class Database {
           (e: any) => !['enr_stu_0001', 'enr_tch_0001', 'enr_sta_0001', 'enr_sta_0002', 'enr_sta_0003'].includes(e.id)
         );
 
+        // Cleanse legacy base64 image snapshots from disk to ensure zero personal photos stored
+        if (parsed.manualReviews) {
+          parsed.manualReviews.forEach((r: any) => { delete r.photoSnapshot; });
+        }
+        if (parsed.qrSessions) {
+          parsed.qrSessions.forEach((s: any) => {
+            (s.captures || []).forEach((c: any) => { delete c.thumbnailUrl; });
+          });
+        }
+
         // Synchronize and verify the 5 authorized team members
         const seed = getInitialSeedData();
         for (const seedUser of seed.users) {
@@ -594,7 +604,23 @@ class Database {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+      // Ephemeral image protection: Base64 camera thumbnails and review snapshots remain in-memory
+      // during active sessions/reviews but are stripped from disk persistence to prevent storing personal biometric photos.
+      const sanitized = {
+        ...data,
+        qrSessions: (data.qrSessions || []).map((session) => ({
+          ...session,
+          captures: (session.captures || []).map((cap) => {
+            const { thumbnailUrl, ...rest } = cap;
+            return rest;
+          }),
+        })),
+        manualReviews: (data.manualReviews || []).map((rev) => {
+          const { photoSnapshot, ...rest } = rev;
+          return rest;
+        }),
+      };
+      fs.writeFileSync(DB_FILE, JSON.stringify(sanitized, null, 2), 'utf-8');
     } catch (err) {
       console.error('[DB] Failed to persist db.json:', err);
     }

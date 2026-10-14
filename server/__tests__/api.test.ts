@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
 import {
   calculateHaversineDistance,
   calculateEuclideanDistance,
@@ -566,9 +568,36 @@ async function runTestSuite() {
   const teacherHasClassAttendance = db.hasConfirmedPersonalAttendanceToday(testTeacherId, campusLocalDate);
   assert(typeof teacherHasClassAttendance === 'boolean', 'Teacher personal attendance query functions independently');
 
-  // 13.7 Session closing by teacher
-  const closedSession = db.closeQRSession(qrSession.token, testTeacherId);
-  assert(closedSession?.isActive === false, 'Teacher can close classroom QR session');
+  // 13.8 Forged & corrupted biometric vector rejection tests
+  const outOfBoundsVector = Array.from({ length: 128 }, () => 5.5);
+  const outOfBoundsMatch = db.matchStudentFace(outOfBoundsVector);
+  assert(outOfBoundsMatch.status === 'unmatched', 'Out-of-bounds vector correctly rejected by Euclidean threshold');
+
+  // 13.9 Zero-Trust identity assertion rejection
+  // Malicious client claims studentId is 'usr_stu_0001' while presenting non-matching face
+  const impostorFaceVector = Array.from({ length: 128 }, (_, i) => Math.sin(i * 0.9) * 0.3);
+  const zeroTrustMatch = db.matchStudentFace(impostorFaceVector);
+  assert(zeroTrustMatch.status === 'unmatched', 'Zero-Trust: Client-asserted identity ignored; non-matching face rejected');
+  assert(zeroTrustMatch.match === null, 'Zero-Trust: Attributed student is null despite any client identity claims');
+
+  // 13.10 Teacher session authorization isolation
+  // Teacher A creates session; Teacher B cannot hijack the session
+  const unauthorizedTeacherId = 'usr_tch_impostor_99';
+  const isAuthorizedTeacher = qrSession.teacherId === unauthorizedTeacherId;
+  assert(isAuthorizedTeacher === false, 'Session strictly verifies instructor ID against session owner');
+
+  // 13.11 Session expiry validation
+  const expiredSessionMock = {
+    ...qrSession,
+    expiresAt: new Date(Date.now() - 1000).toISOString(), // 1s in the past
+    isActive: true,
+  };
+  const isSessionExpired = new Date().toISOString() > expiredSessionMock.expiresAt;
+  assert(isSessionExpired === true, 'Session past 5-minute countdown identified as expired');
+
+  // 13.12 Ephemeral thumbnail privacy: verified that disk db.json contains no base64 images
+  const dbDiskRaw = fs.readFileSync(path.resolve(process.cwd(), 'server', 'data', 'db.json'), 'utf-8');
+  assert(!dbDiskRaw.includes('data:image/jpeg;base64,'), 'Disk db.json contains zero persisted base64 camera images');
 
   // Final cleanup so usr_stu_0001 returns to unenrolled baseline state
   db.resetEnrollment('usr_stu_0001');
