@@ -9,13 +9,17 @@ import {
   RefreshCw,
   HelpCircle,
   Send,
-  UserCheck,
   ArrowRight,
   LogOut,
   XCircle,
 } from 'lucide-react';
 import { UserProfile, AttendanceEvent } from '../types';
-import { faceService, LivenessChallenge } from '../services/faceVerification';
+import {
+  faceService,
+  LivenessChallenge,
+  analyzeFrameLighting,
+  LivenessSessionTracker,
+} from '../services/faceVerification';
 import { api } from '../services/api';
 
 interface MandatoryAttendanceScreenProps {
@@ -56,6 +60,8 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
   } | null>(null);
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [faceStatusText, setFaceStatusText] = useState<string>('Searching for face...');
+  const [trackerPhase, setTrackerPhase] = useState<'searching' | 'stabilizing' | 'challenge_active' | 'passed' | 'failed'>('searching');
   const [activeChallenge, setActiveChallenge] = useState<LivenessChallenge | null>(null);
   const [livenessPassed, setLivenessPassed] = useState<boolean>(false);
   const [attendanceRecord, setAttendanceRecord] = useState<AttendanceEvent | null>(null);
@@ -65,7 +71,8 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const detectionLoopRef = useRef<number | null>(null);
+  const trackerRef = useRef<LivenessSessionTracker>(faceService.createLivenessTracker());
+  const isDetectingRef = useRef(false);
   const isProcessingRef = useRef(false);
 
   // 1. Initial Gate Check & Network Status
@@ -94,14 +101,16 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
 
           if (!gateRes.isEnrolled) {
             setState('enrollment_required');
-            setErrorMessage(gateRes.enrollmentNote || 'Biometric reference profile not enrolled. Live camera enrollment required.');
+            setErrorMessage(
+              gateRes.enrollmentNote ||
+                'Biometric reference profile not enrolled. Live camera enrollment required.'
+            );
             return;
           }
         }
 
-        // Proceed to camera
+        // Proceed to camera face detection
         setState('detecting_face');
-        setActiveChallenge(faceService.getRandomChallenge());
       } catch (err: unknown) {
         const e = err as Error;
         setErrorMessage(e.message || 'Failed to inspect attendance gate status.');
@@ -125,28 +134,37 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
         return;
       }
 
+      // Re-use active stream if available
+      if (streamRef.current && streamRef.current.active && videoRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+        await videoRef.current.play().catch(console.warn);
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: 640, height: 480 },
+        video: {
+          facingMode: 'user',
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+        },
         audio: false,
       });
 
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(console.warn);
+        await videoRef.current.play().catch(console.warn);
       }
     } catch (err: unknown) {
       const e = err as Error;
       setState('camera_permission_required');
-      setErrorMessage(e.message || 'Camera permission denied. Please allow camera access in browser settings.');
+      setErrorMessage(
+        e.message || 'Camera permission denied. Please allow camera access in browser settings.'
+      );
     }
   }, []);
 
   const stopCamera = useCallback(() => {
-    if (detectionLoopRef.current) {
-      cancelAnimationFrame(detectionLoopRef.current);
-      detectionLoopRef.current = null;
-    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -156,87 +174,118 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
   useEffect(() => {
     if (state === 'detecting_face' || state === 'liveness_challenge') {
       startCamera();
-    } else {
+    } else if (state === 'attendance_recorded' || state === 'enrollment_required') {
       stopCamera();
     }
     return () => {
-      stopCamera();
+      if (state !== 'detecting_face' && state !== 'liveness_challenge') {
+        stopCamera();
+      }
     };
   }, [state, startCamera, stopCamera]);
 
-  // 3. Real-time Face Detection & Biometric Submission Loop
+  // 3. Real-time Face Detection & Multi-Frame Liveness Loop
   useEffect(() => {
     if (state !== 'detecting_face' && state !== 'liveness_challenge') return;
 
     let active = true;
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+    const tracker = trackerRef.current;
 
     const runDetection = async () => {
-      if (!active || isProcessingRef.current || !videoRef.current) {
-        detectionLoopRef.current = requestAnimationFrame(runDetection);
+      if (!active) return;
+
+      const video = videoRef.current;
+      if (
+        !video ||
+        isDetectingRef.current ||
+        isProcessingRef.current ||
+        video.readyState < 3 ||
+        video.videoWidth === 0 ||
+        video.videoHeight === 0 ||
+        video.paused
+      ) {
+        if (active) {
+          timerId = setTimeout(runDetection, 180);
+        }
         return;
       }
 
-      if (videoRef.current.readyState >= 2) {
-        try {
-          const res = await faceService.detectFace(videoRef.current, activeChallenge || undefined);
+      isDetectingRef.current = true;
 
-          if (res.detected && res.descriptor) {
-            // Check basic guided liveness
-            if (activeChallenge && !livenessPassed) {
-              if (res.livenessPassed) {
-                setLivenessPassed(true);
-              }
+      try {
+        const lighting = analyzeFrameLighting(video);
+        const res = await faceService.detectFace(video, tracker.getActiveChallenge() || undefined);
+
+        if (!active) return;
+
+        const update = tracker.processFrame(res.detected ? res : null, lighting);
+        setTrackerPhase(update.phase);
+        setFaceStatusText(update.message);
+        setActiveChallenge(update.challenge);
+
+        // Once multi-frame temporal liveness is verified
+        if (update.livenessPassed && !isProcessingRef.current) {
+          isProcessingRef.current = true;
+          setLivenessPassed(true);
+          setState('submitting');
+          setFaceStatusText('Verifying facial identity with campus server...');
+
+          const descriptor = res.descriptor;
+          if (descriptor && descriptor.length === 128) {
+            const submitRes = await api.verifyPersonalAttendance({
+              faceDescriptor: descriptor,
+              livenessPassed: true,
+            });
+
+            if (submitRes.success) {
+              setAttendanceRecord(submitRes.record);
+              setState('attendance_recorded');
+            } else {
+              setState('verification_failed');
+              setErrorMessage(submitRes.message || 'Attendance verification failed.');
             }
-
-            // Once liveness confirmed or ready, trigger server verification
-            if (!activeChallenge || livenessPassed || res.livenessPassed) {
-              isProcessingRef.current = true;
-              setState('submitting');
-
-              const submitRes = await api.verifyPersonalAttendance({
-                faceDescriptor: res.descriptor,
-                livenessPassed: true,
-              });
-
-              if (submitRes.success) {
-                setAttendanceRecord(submitRes.record);
-                setState('attendance_recorded');
-              } else {
-                setState('verification_failed');
-                setErrorMessage(submitRes.message || 'Attendance verification failed.');
-              }
-              return;
-            }
-          }
-        } catch (err: unknown) {
-          const e = err as any;
-          if (e.message && e.message.includes('Facial identity verification failed')) {
-            setState('face_mismatch');
-            setErrorMessage(e.message);
-          } else if (e.message && e.message.includes('Network verification failed')) {
-            setState('network_not_verified');
-            setErrorMessage(e.message);
-          } else if (e.message && e.message.includes('ENROLLMENT_REQUIRED')) {
-            setState('enrollment_required');
-            setErrorMessage(e.message);
           } else {
-            console.warn('[AttendanceGate] Inference/verification note:', err);
+            setState('verification_failed');
+            setErrorMessage('Unable to extract clear biometric embedding. Please try again.');
           }
+          return;
+        }
+      } catch (err: unknown) {
+        const e = err as any;
+        if (e.message && e.message.includes('Facial identity verification failed')) {
+          setState('face_mismatch');
+          setErrorMessage(e.message);
+        } else if (e.message && e.message.includes('Network verification failed')) {
+          setState('network_not_verified');
+          setErrorMessage(e.message);
+        } else if (e.message && e.message.includes('ENROLLMENT_REQUIRED')) {
+          setState('enrollment_required');
+          setErrorMessage(e.message);
+        } else {
+          console.warn('[AttendanceGate] Inference notice:', err);
+        }
+      } finally {
+        isDetectingRef.current = false;
+        if (active && !isProcessingRef.current) {
+          // Throttled frame interval (~180ms = ~5.5 FPS) prevents mobile heating
+          timerId = setTimeout(runDetection, 180);
         }
       }
-
-      detectionLoopRef.current = requestAnimationFrame(runDetection);
     };
 
-    detectionLoopRef.current = requestAnimationFrame(runDetection);
+    // Preload biometric neural weights then start throttled loop
+    faceService.loadModels().then(() => {
+      if (active) {
+        timerId = setTimeout(runDetection, 250);
+      }
+    });
 
     return () => {
       active = false;
-      if (detectionLoopRef.current) {
-        cancelAnimationFrame(detectionLoopRef.current);
-      }
+      if (timerId) clearTimeout(timerId);
     };
-  }, [state, activeChallenge, livenessPassed]);
+  }, [state]);
 
   // 4. Submit Manual Review Request
   const handleSubmitManualReview = async (e: React.FormEvent) => {
@@ -255,6 +304,17 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleRetryVerification = () => {
+    isProcessingRef.current = false;
+    isDetectingRef.current = false;
+    trackerRef.current.reset();
+    setLivenessPassed(false);
+    setActiveChallenge(null);
+    setTrackerPhase('searching');
+    setFaceStatusText('Searching for face... Center your face in view.');
+    setState('detecting_face');
   };
 
   return (
@@ -319,7 +379,7 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
 
         {/* Prototype Network Notice */}
         {(networkInfo?.isDemo || networkInfo?.isSimulated) && (
-          <div className="px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-2.5 text-xs text-amber-200/90">
+          <div className="px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-2.5 text-xs text-amber-200/90 mb-3">
             <Wifi className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <span className="font-bold text-amber-300 block text-[11px] uppercase tracking-wider">
@@ -361,7 +421,7 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
           </div>
         )}
 
-        {/* State 2: Enrollment Required (e.g. Amar AI reference needing genuine capture) */}
+        {/* State 2: Enrollment Required */}
         {state === 'enrollment_required' && (
           <div className="bg-amber-950/40 border border-amber-500/40 rounded-2xl p-6 text-center space-y-4 shadow-2xl">
             <div className="w-16 h-16 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
@@ -370,7 +430,8 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
             <div>
               <h3 className="text-base font-bold text-amber-200">Live Biometric Enrollment Required</h3>
               <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-                {errorMessage || 'Your reference image appears AI-generated or is pending initial biometric capture. To mark attendance, please perform a genuine live enrollment.'}
+                {errorMessage ||
+                  'Your profile requires an authentic live facial enrollment before marking campus attendance.'}
               </p>
             </div>
 
@@ -406,14 +467,16 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
                 className="w-full h-full object-cover transform -scale-x-100"
               />
 
-              {/* Oval Face Guide Overlay */}
+              {/* Dynamic Responsive Face Guide Overlay */}
               <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                 <div
-                  className={`w-48 h-64 rounded-[50%] border-2 transition-colors duration-300 ${
-                    state === 'submitting'
+                  className={`w-48 h-64 rounded-[50%] border-2 transition-all duration-300 ${
+                    state === 'submitting' || trackerPhase === 'passed'
                       ? 'border-emerald-400 shadow-[0_0_24px_rgba(52,211,153,0.5)]'
-                      : livenessPassed
-                      ? 'border-emerald-400'
+                      : trackerPhase === 'challenge_active'
+                      ? 'border-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.35)]'
+                      : trackerPhase === 'stabilizing'
+                      ? 'border-teal-400 shadow-[0_0_12px_rgba(45,212,191,0.25)]'
                       : 'border-rose-400/80 animate-pulse'
                   }`}
                 />
@@ -422,7 +485,15 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
               {/* Status Badge */}
               <div className="absolute top-3 left-3 right-3 flex items-center justify-between text-[11px] font-medium">
                 <span className="px-2.5 py-1 rounded-full bg-black/60 backdrop-blur text-white flex items-center gap-1.5 border border-white/10">
-                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      trackerPhase === 'passed'
+                        ? 'bg-emerald-400'
+                        : trackerPhase === 'challenge_active'
+                        ? 'bg-amber-400 animate-ping'
+                        : 'bg-rose-500 animate-ping'
+                    }`}
+                  />
                   Live Camera Feed
                 </span>
 
@@ -433,23 +504,40 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
                 )}
               </div>
 
-              {/* Guided Challenge Indicator */}
-              {activeChallenge && (
-                <div className="absolute bottom-3 left-3 right-3 p-2.5 rounded-xl bg-black/75 backdrop-blur border border-white/10 text-center">
-                  <p className="text-xs font-semibold text-rose-200">
-                    {livenessPassed ? '✅ Challenge Passed — Verifying Identity...' : activeChallenge.instruction}
+              {/* Actionable Status & Guidance Indicator (Only shows challenge when face is stable) */}
+              <div className="absolute bottom-3 left-3 right-3 p-2.5 rounded-xl bg-black/80 backdrop-blur border border-white/10 text-center">
+                {trackerPhase === 'challenge_active' && activeChallenge ? (
+                  <div>
+                    <p className="text-xs font-bold text-amber-200">
+                      {activeChallenge.instruction}
+                    </p>
+                    <p className="text-[10px] text-slate-300 mt-0.5">
+                      {activeChallenge.hint} &bull; (Dynamic anti-spoofing challenge)
+                    </p>
+                  </div>
+                ) : trackerPhase === 'stabilizing' ? (
+                  <p className="text-xs font-medium text-teal-200 flex items-center justify-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-teal-400 animate-spin" />
+                    <span>{faceStatusText}</span>
                   </p>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    {activeChallenge.hint} (Basic guided liveness check)
+                ) : trackerPhase === 'passed' || state === 'submitting' ? (
+                  <p className="text-xs font-semibold text-emerald-300 flex items-center justify-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>{faceStatusText}</span>
                   </p>
-                </div>
-              )}
+                ) : (
+                  <p className="text-xs font-medium text-slate-300 flex items-center justify-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>{faceStatusText}</span>
+                  </p>
+                )}
+              </div>
             </div>
 
             {/* Helper Instructions */}
             <div className="flex items-center justify-between pt-1">
               <p className="text-[11px] text-slate-400">
-                Center your face and maintain good lighting.
+                Hold face inside oval &bull; Calibrated indoor detection
               </p>
               <button
                 onClick={() => setState('manual_review')}
@@ -481,12 +569,7 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
 
             <div className="flex flex-col gap-2 pt-2">
               <button
-                onClick={() => {
-                  isProcessingRef.current = false;
-                  setLivenessPassed(false);
-                  setActiveChallenge(faceService.getRandomChallenge());
-                  setState('detecting_face');
-                }}
+                onClick={handleRetryVerification}
                 className="w-full py-3 px-4 rounded-xl bg-[#800020] hover:bg-[#990026] text-white font-semibold text-xs shadow-lg transition-all flex items-center justify-center gap-2"
               >
                 <RefreshCw className="w-4 h-4" />
@@ -512,16 +595,14 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
             <div>
               <h3 className="text-base font-bold text-amber-200">Campus Wi-Fi Required</h3>
               <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-                {errorMessage || 'Attendance must be marked from an approved campus network subnet. Connection refused.'}
+                {errorMessage ||
+                  'Attendance must be marked from an approved campus network subnet. Connection refused.'}
               </p>
             </div>
 
             <div className="flex flex-col gap-2 pt-2">
               <button
-                onClick={() => {
-                  isProcessingRef.current = false;
-                  setState('detecting_face');
-                }}
+                onClick={handleRetryVerification}
                 className="w-full py-3 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs shadow-lg transition-all"
               >
                 Retry Network Handshake
@@ -559,7 +640,39 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
           </div>
         )}
 
-        {/* State 7: Manual Review Form */}
+        {/* State 7: Verification Failed (Timeout / Technical) */}
+        {state === 'verification_failed' && (
+          <div className="bg-slate-800 rounded-2xl p-6 text-center space-y-4 border border-slate-700 shadow-2xl">
+            <div className="w-16 h-16 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto">
+              <AlertCircle className="w-9 h-9" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white">Verification Failed</h3>
+              <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                {errorMessage || 'Verification process encountered an unexpected issue.'}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={handleRetryVerification}
+                className="w-full py-3 px-4 rounded-xl bg-[#800020] hover:bg-[#990026] text-white font-semibold text-xs shadow-lg transition-all flex items-center justify-center gap-2"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Retry Verification</span>
+              </button>
+
+              <button
+                onClick={() => setState('manual_review')}
+                className="text-xs text-slate-400 hover:text-slate-200 py-2"
+              >
+                Request Administrative Review
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* State 8: Manual Review Form */}
         {state === 'manual_review' && (
           <div className="bg-slate-800 rounded-2xl p-5 border border-slate-700 shadow-2xl space-y-3">
             <div className="flex items-center gap-2 border-b border-slate-700 pb-3">

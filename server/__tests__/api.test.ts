@@ -10,6 +10,11 @@ import {
   validateDescriptorIntegrity,
   validateAttendanceSubmission,
 } from '../routes/attendance';
+import {
+  evaluateFacePosition,
+  LivenessSessionTracker,
+  TrackedFaceData as FaceDetectionResult,
+} from '../../src/services/livenessTracker';
 
 async function runTestSuite() {
   console.log('🧪 ========================================================');
@@ -715,6 +720,121 @@ async function runTestSuite() {
   assert(gitignoreContent.includes('private-enrollment-storage/'), '.gitignore protects private enrollment storage');
   assert(gitignoreContent.includes('storage/'), '.gitignore protects general storage');
   assert(gitignoreContent.includes('uploads/'), '.gitignore protects file uploads');
+
+  // 15. Face Verification Accuracy, Speed & Temporal Anti-Spoofing Tests
+  console.log('\n--- 15. Face Verification Accuracy, Responsiveness & Anti-Spoofing Tests ---');
+
+  // 15.1 Face positioning & distance guidance tests
+  const centeredBox = { x: 200, y: 120, width: 240, height: 240 };
+  const centeredPos = evaluateFacePosition(centeredBox, 640, 480);
+  assert(centeredPos.isAligned === true, 'Centered face with standard box ratio passes alignment check');
+  assert(centeredPos.issue === 'ok', 'Centered face reported with ok status');
+
+  // Moderate off-center positioning (forgiving tolerance)
+  const moderateOffCenter = { x: 80, y: 100, width: 220, height: 220 };
+  const modPos = evaluateFacePosition(moderateOffCenter, 640, 480);
+  assert(modPos.isAligned === true, 'Moderate off-center face accepted without jarring rejection');
+
+  // Severely off-center (face clipped at border)
+  const severelyOffCenter = { x: 10, y: 100, width: 100, height: 100 };
+  const severePos = evaluateFacePosition(severelyOffCenter, 640, 480);
+  assert(severePos.isAligned === false && severePos.issue === 'off_center', 'Face severely near frame edge flagged with off_center guidance');
+
+  // Face too far away (small box ratio < 0.15)
+  const tooFarBox = { x: 280, y: 200, width: 60, height: 60 };
+  const tooFarPos = evaluateFacePosition(tooFarBox, 640, 480);
+  assert(tooFarPos.isAligned === false && tooFarPos.issue === 'too_far', 'Face too far from camera flagged with move-closer guidance');
+
+  // Face too close (box ratio > 0.82)
+  const tooCloseBox = { x: 20, y: 10, width: 600, height: 460 };
+  const tooClosePos = evaluateFacePosition(tooCloseBox, 640, 480);
+  assert(tooClosePos.isAligned === false && tooClosePos.issue === 'too_close', 'Face too close to camera flagged with move-farther guidance');
+
+  // 15.2 LivenessSessionTracker multi-frame stabilization before challenge
+  const tracker = new LivenessSessionTracker();
+  assert(tracker.getPhase() === 'searching', 'Tracker starts in searching phase');
+  assert(tracker.getActiveChallenge() === null, 'No challenge active during initial searching phase');
+
+  // Frame 1: Face detected
+  const mockFrame1: FaceDetectionResult = {
+    detected: true,
+    score: 0.85,
+    box: centeredBox,
+    guidance: { isAligned: true, issue: 'ok', boxRatio: 0.375 },
+    landmarks: { yawRatio: 0.50, leftEAR: 0.32, smileScore: 0.05 },
+    expressions: { happy: 0.05, neutral: 0.90 },
+  };
+  const update1 = tracker.processFrame(mockFrame1);
+  assert(update1.phase === 'stabilizing', 'First frame transitions to stabilizing phase');
+  assert(update1.challenge === null, 'Challenge remains inactive while stabilizing (1/3)');
+
+  // Frame 2: Stabilizing continues
+  const update2 = tracker.processFrame(mockFrame1);
+  assert(update2.phase === 'stabilizing', 'Second frame continues stabilizing (2/3)');
+  assert(update2.challenge === null, 'Challenge remains inactive while stabilizing (2/3)');
+
+  // Frame 3: Stabilizing completes, locks neutral baseline and issues randomized challenge
+  const update3 = tracker.processFrame(mockFrame1);
+  assert(update3.phase === 'challenge_active', 'Third stable frame activates randomized challenge');
+  assert(update3.challenge !== null, 'Randomized liveness challenge issued after stable baseline');
+
+  // 15.3 Anti-Spoofing: Static photo proxy rejection test
+  // An attacker presents a static printed photo or phone screen (landmarks & yaw remain constant)
+  let staticPhotoPassed = false;
+  for (let frame = 0; frame < 5; frame++) {
+    const staticRes = tracker.processFrame(mockFrame1);
+    if (staticRes.livenessPassed) {
+      staticPhotoPassed = true;
+    }
+  }
+  assert(staticPhotoPassed === false, 'Static photograph / screen proxy strictly fails dynamic challenge');
+  assert(tracker.isPassed() === false, 'Tracker isPassed remains false for static photograph');
+
+  // 15.4 Anti-Spoofing: Genuine dynamic user response test
+  // The user dynamically performs the assigned challenge
+  const dynamicTracker = new LivenessSessionTracker();
+  dynamicTracker.processFrame(mockFrame1);
+  dynamicTracker.processFrame(mockFrame1);
+  const dynReady = dynamicTracker.processFrame(mockFrame1);
+  const activeAction = dynReady.challenge!.action;
+
+  let dynamicFrame: FaceDetectionResult;
+  if (activeAction === 'turn_left') {
+    dynamicFrame = {
+      ...mockFrame1,
+      landmarks: { yawRatio: 0.38, leftEAR: 0.32, smileScore: 0.05 },
+    };
+  } else if (activeAction === 'turn_right') {
+    dynamicFrame = {
+      ...mockFrame1,
+      landmarks: { yawRatio: 0.62, leftEAR: 0.32, smileScore: 0.05 },
+    };
+  } else if (activeAction === 'smile') {
+    dynamicFrame = {
+      ...mockFrame1,
+      landmarks: { yawRatio: 0.50, leftEAR: 0.32, smileScore: 0.75 },
+      expressions: { happy: 0.75, neutral: 0.20 },
+    };
+  } else {
+    dynamicFrame = {
+      ...mockFrame1,
+      landmarks: { yawRatio: 0.50, leftEAR: 0.14, smileScore: 0.05 },
+    };
+  }
+
+  // 1st dynamic frame
+  dynamicTracker.processFrame(dynamicFrame);
+  // 2nd dynamic frame (confirming 2-frame consistency)
+  const finalDynamicUpdate = dynamicTracker.processFrame(dynamicFrame);
+  assert(finalDynamicUpdate.livenessPassed === true, 'Legitimate dynamic movement passing challenge criteria is verified');
+  assert(dynamicTracker.isPassed() === true, 'Tracker enters passed phase after verified consecutive dynamic response');
+
+  // 15.5 Detection gap tolerance (intermittent frame drop / motion blur)
+  const gapTracker = new LivenessSessionTracker();
+  gapTracker.processFrame(mockFrame1);
+  gapTracker.processFrame(mockFrame1);
+  gapTracker.processFrame(null);
+  assert(gapTracker.getPhase() === 'stabilizing', 'Single transient dropped frame does not reset stabilizing session');
 
   // Final cleanup so usr_stu_0001 returns to unenrolled baseline state
   db.resetEnrollment('usr_stu_0001');

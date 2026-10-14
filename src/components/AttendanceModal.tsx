@@ -89,6 +89,8 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const lastDescriptorRef = useRef<number[] | null>(null);
+  const isDetectingRef = useRef(false);
+  const loopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 1. Live Device Location Query
   const checkPresence = useCallback(async () => {
@@ -167,6 +169,10 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
   // Stop camera helper
   const stopCamera = useCallback(() => {
+    if (loopTimerRef.current) {
+      clearTimeout(loopTimerRef.current);
+      loopTimerRef.current = null;
+    }
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
@@ -176,6 +182,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       streamRef.current = null;
     }
     setStream(null);
+    isDetectingRef.current = false;
   }, []);
 
   // Initialize on mount
@@ -199,16 +206,25 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
     const detectLoop = async () => {
       if (!active || !videoRef.current) return;
 
-      if (videoRef.current.readyState >= 2) {
+      const video = videoRef.current;
+      if (
+        !isDetectingRef.current &&
+        video.readyState >= 3 &&
+        video.videoWidth > 0 &&
+        video.videoHeight > 0 &&
+        !video.paused
+      ) {
+        isDetectingRef.current = true;
         try {
           const res: FaceDetectionResult = await faceService.detectFace(
-            videoRef.current,
+            video,
             challenge || undefined
           );
 
+          if (!active) return;
+
           if (!res.detected) {
             // STATE: searching_face (Face lost or not centered)
-            // STRICT: Never allow 'eligible' or 'PASS' when face is not detected!
             setFaceState('searching_face');
             setFaceStatusText(res.message || 'Searching for face... Center face inside oval guide');
           } else {
@@ -219,39 +235,35 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
             // Check Identity & Biometric Enrollment first
             if (!user.isEnrolled) {
-              // STATE: identity_verification failed (unenrolled)
               setFaceState('identity_verification');
               setFaceStatusText('Face detected, but biometric profile not enrolled. Complete enrollment first.');
+            } else if (res.livenessPassed) {
+              setFaceState('eligible');
+              setFaceStatusText('Liveness & identity verified! Eligible for attendance submission.');
             } else {
-              // User IS enrolled, check liveness
-              if (res.livenessPassed) {
-                // STATE: eligible (Liveness & Identity confirmed)
-                setFaceState('eligible');
-                setFaceStatusText('Liveness & identity verified! Eligible for attendance submission.');
-              } else {
-                // STATE: liveness_verification in progress
-                setFaceState('liveness_verification');
-                setFaceStatusText(challenge?.instruction || 'Face detected. Please perform the liveness gesture...');
-              }
+              setFaceState('liveness_verification');
+              setFaceStatusText(challenge?.instruction || 'Face detected. Please hold steady...');
             }
           }
         } catch (err) {
           console.debug('[Face] Real-time inference tick:', err);
+        } finally {
+          isDetectingRef.current = false;
         }
       }
 
       if (active) {
-        animFrameRef.current = requestAnimationFrame(detectLoop);
+        loopTimerRef.current = setTimeout(detectLoop, 180);
       }
     };
 
-    const timer = setTimeout(() => {
-      animFrameRef.current = requestAnimationFrame(detectLoop);
-    }, 600);
+    loopTimerRef.current = setTimeout(detectLoop, 300);
 
     return () => {
       active = false;
-      clearTimeout(timer);
+      if (loopTimerRef.current) {
+        clearTimeout(loopTimerRef.current);
+      }
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
       }

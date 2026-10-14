@@ -39,6 +39,8 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const lastDescriptorRef = useRef<number[] | null>(null);
+  const isDetectingRef = useRef(false);
+  const loopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const startCamera = useCallback(async () => {
     setCameraError(null);
@@ -63,6 +65,10 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({
   }, []);
 
   const stopCamera = useCallback(() => {
+    if (loopTimerRef.current) {
+      clearTimeout(loopTimerRef.current);
+      loopTimerRef.current = null;
+    }
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
@@ -72,6 +78,7 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({
       streamRef.current = null;
     }
     setStream(null);
+    isDetectingRef.current = false;
   }, []);
 
   useEffect(() => {
@@ -90,9 +97,19 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({
     const checkFace = async () => {
       if (!active || !videoRef.current) return;
 
-      if (videoRef.current.readyState >= 2) {
+      const video = videoRef.current;
+      if (
+        !isDetectingRef.current &&
+        video.readyState >= 3 &&
+        video.videoWidth > 0 &&
+        video.videoHeight > 0 &&
+        !video.paused
+      ) {
+        isDetectingRef.current = true;
         try {
-          const res = await faceService.detectFace(videoRef.current);
+          const res = await faceService.detectFace(video);
+          if (!active) return;
+
           if (res.detected && res.descriptor) {
             lastDescriptorRef.current = res.descriptor;
             setFaceQuality('good');
@@ -103,21 +120,23 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({
           }
         } catch {
           // Silent tick
+        } finally {
+          isDetectingRef.current = false;
         }
       }
 
       if (active) {
-        animFrameRef.current = requestAnimationFrame(checkFace);
+        loopTimerRef.current = setTimeout(checkFace, 180);
       }
     };
 
-    const timer = setTimeout(() => {
-      animFrameRef.current = requestAnimationFrame(checkFace);
-    }, 600);
+    loopTimerRef.current = setTimeout(checkFace, 400);
 
     return () => {
       active = false;
-      clearTimeout(timer);
+      if (loopTimerRef.current) {
+        clearTimeout(loopTimerRef.current);
+      }
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
       }

@@ -149,6 +149,21 @@ export const ClassStudentCaptureModal: React.FC<ClassStudentCaptureModalProps> =
 
     try {
       const video = videoRef.current;
+      if (
+        video.readyState < 3 ||
+        video.videoWidth === 0 ||
+        video.videoHeight === 0 ||
+        video.paused
+      ) {
+        setCaptureFeedback({
+          type: 'error',
+          title: 'Camera Initializing',
+          message: 'Camera stream is still stabilizing. Please wait a moment and tap Capture again.',
+        });
+        setCapturing(false);
+        return;
+      }
+
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth || 640;
       canvas.height = video.videoHeight || 480;
@@ -158,7 +173,7 @@ export const ClassStudentCaptureModal: React.FC<ClassStudentCaptureModalProps> =
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const thumbnailBase64 = canvas.toDataURL('image/jpeg', 0.85);
 
-      // Detect genuine face descriptor via face-api.js
+      // Detect genuine face descriptor via face-api.js with calibrated dual-pass
       const detection = await faceService.detectFace(video);
       const descriptor = detection.descriptor;
 
@@ -166,7 +181,9 @@ export const ClassStudentCaptureModal: React.FC<ClassStudentCaptureModalProps> =
         setCaptureFeedback({
           type: 'error',
           title: 'No Face Detected',
-          message: detection.message || 'No face detected in camera frame. Ensure student is directly facing the camera.',
+          message:
+            detection.message ||
+            'No face detected in camera frame. Ensure student is directly facing the camera with good lighting.',
         });
         setCapturing(false);
         return;

@@ -1,45 +1,31 @@
 import * as faceapi from '@vladmandic/face-api';
+import {
+  FrameLighting,
+  FacePositionGuidance,
+  LivenessAction,
+  LivenessChallenge,
+  LIVENESS_CHALLENGES,
+  TrackedFaceData,
+  analyzeFrameLighting,
+  evaluateFacePosition,
+  LivenessSessionTracker,
+} from './livenessTracker';
 
-export interface FaceDetectionResult {
-  detected: boolean;
-  score: number;
-  box?: { x: number; y: number; width: number; height: number };
-  descriptor?: number[];
-  expressions?: Record<string, number>;
-  livenessPassed?: boolean;
-  message?: string;
-}
+export type {
+  FrameLighting,
+  FacePositionGuidance,
+  LivenessAction,
+  LivenessChallenge,
+  TrackedFaceData,
+};
+export {
+  LIVENESS_CHALLENGES,
+  analyzeFrameLighting,
+  evaluateFacePosition,
+  LivenessSessionTracker,
+};
 
-export type LivenessAction = 'blink' | 'turn_left' | 'turn_right' | 'smile';
-
-export interface LivenessChallenge {
-  action: LivenessAction;
-  instruction: string;
-  hint: string;
-}
-
-const LIVENESS_CHALLENGES: LivenessChallenge[] = [
-  {
-    action: 'blink',
-    instruction: 'Please blink both eyes naturally',
-    hint: 'Close and open your eyes once',
-  },
-  {
-    action: 'turn_left',
-    instruction: 'Turn your head slightly to your left',
-    hint: 'Gently rotate your head ~15° left',
-  },
-  {
-    action: 'turn_right',
-    instruction: 'Turn your head slightly to your right',
-    hint: 'Gently rotate your head ~15° right',
-  },
-  {
-    action: 'smile',
-    instruction: 'Give a gentle smile to the camera',
-    hint: 'Ensure your smile is visible',
-  },
-];
+export type FaceDetectionResult = TrackedFaceData;
 
 class FaceVerificationService {
   private modelsLoaded = false;
@@ -53,16 +39,18 @@ class FaceVerificationService {
     this.loadingPromise = (async () => {
       try {
         const MODEL_URL = '/models';
-        console.log('[FaceAPI] Loading local models from', MODEL_URL);
+        console.log('[FaceAPI] Loading optimized biometric weights from', MODEL_URL);
 
-        // Load lightweight tiny face detector or ssdMobilenetv1
-        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-        await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
-        await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-        await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+        // Load lightweight tiny face detector + landmark + recognition + expression
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+          faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
+        ]);
 
         this.modelsLoaded = true;
-        console.log('[FaceAPI] All models loaded successfully');
+        console.log('[FaceAPI] All biometric neural weights loaded successfully');
         return true;
       } catch (err) {
         console.error('[FaceAPI] Failed to load official weights:', err);
@@ -83,33 +71,85 @@ class FaceVerificationService {
     return LIVENESS_CHALLENGES[this.currentChallengeIndex];
   }
 
+  createLivenessTracker(): LivenessSessionTracker {
+    return new LivenessSessionTracker();
+  }
+
+  /**
+   * Detects face in a video frame with calibrated dual-pass detection:
+   * - Primary pass: inputSize 416 with scoreThreshold 0.32 (captures medium distance faces in typical indoor lighting)
+   * - Secondary fallback: inputSize 320 with scoreThreshold 0.25 (handles close-up or lower-contrast captures)
+   * Evaluates lighting and bounding box positioning to provide forgiving, actionable guidance.
+   */
   async detectFace(
     video: HTMLVideoElement,
     activeChallenge?: LivenessChallenge
   ): Promise<FaceDetectionResult> {
-    if (!video || video.readyState < 2) {
-      return { detected: false, score: 0, message: 'Camera feed not ready' };
+    if (
+      !video ||
+      video.readyState < 3 ||
+      video.videoWidth === 0 ||
+      video.videoHeight === 0 ||
+      video.paused
+    ) {
+      return {
+        detected: false,
+        score: 0,
+        message: 'Camera feed initializing... please wait.',
+      };
     }
 
-    try {
-      await this.loadModels();
+    // Inspect lighting
+    const lighting = analyzeFrameLighting(video);
 
-      const options = new faceapi.TinyFaceDetectorOptions({
-        inputSize: 320,
-        scoreThreshold: 0.5,
+    try {
+      const modelsReady = await this.loadModels();
+      if (!modelsReady) {
+        return {
+          detected: false,
+          score: 0,
+          lighting,
+          message: 'Biometric models loading... Please hold.',
+        };
+      }
+
+      // Primary detection pass: calibrated for indoor/mobile lighting
+      const primaryOptions = new faceapi.TinyFaceDetectorOptions({
+        inputSize: 416,
+        scoreThreshold: 0.32,
       });
 
-      const detection = await faceapi
-        .detectSingleFace(video, options)
+      let detection = await faceapi
+        .detectSingleFace(video, primaryOptions)
         .withFaceLandmarks(true)
         .withFaceExpressions()
         .withFaceDescriptor();
 
+      // Secondary fallback pass if primary returned no detection
       if (!detection) {
+        const fallbackOptions = new faceapi.TinyFaceDetectorOptions({
+          inputSize: 320,
+          scoreThreshold: 0.25,
+        });
+
+        detection = await faceapi
+          .detectSingleFace(video, fallbackOptions)
+          .withFaceLandmarks(true)
+          .withFaceExpressions()
+          .withFaceDescriptor();
+      }
+
+      if (!detection) {
+        let hint = 'Searching for face... Center your face in view.';
+        if (lighting.status !== 'good' && lighting.message) {
+          hint = lighting.message;
+        }
+
         return {
           detected: false,
           score: 0,
-          message: 'No face detected in frame. Please center your face inside the guide.',
+          lighting,
+          message: hint,
         };
       }
 
@@ -118,38 +158,35 @@ class FaceVerificationService {
       const descriptor = Array.from(detection.descriptor);
       const expressions = detection.expressions as unknown as Record<string, number>;
 
-      let livenessPassed = false;
+      // Extract landmark metrics for temporal verification
+      const landmarks = detection.landmarks;
+      const nose = landmarks.getNose()[0];
+      const jaw = landmarks.getJawOutline();
+      const leftJaw = jaw[0];
+      const rightJaw = jaw[16];
+      const jawWidth = Math.abs(rightJaw.x - leftJaw.x) || 1;
+      const yawRatio = (nose.x - leftJaw.x) / jawWidth;
 
-      // Active liveness evaluation
+      const leftEye = landmarks.getLeftEye();
+      const leftHeight = Math.abs(leftEye[1].y - leftEye[5].y) + Math.abs(leftEye[2].y - leftEye[4].y);
+      const leftWidth = Math.abs(leftEye[0].x - leftEye[3].x) * 2 || 1;
+      const leftEAR = leftHeight / leftWidth;
+      const smileScore = expressions.happy || 0;
+
+      // Position & distance evaluation
+      const guidance = evaluateFacePosition(box, video.videoWidth, video.videoHeight);
+
+      // Backwards-compatible single-frame active challenge evaluation
+      let livenessPassed = false;
       if (activeChallenge) {
         if (activeChallenge.action === 'smile') {
-          livenessPassed = (expressions.happy || 0) > 0.65;
+          livenessPassed = smileScore > 0.6;
         } else if (activeChallenge.action === 'turn_left') {
-          // Check landmarks: nose position relative to jaw boundary
-          const landmarks = detection.landmarks;
-          const nose = landmarks.getNose()[0];
-          const jaw = landmarks.getJawOutline();
-          const leftJaw = jaw[0];
-          const rightJaw = jaw[16];
-          const ratio = (nose.x - leftJaw.x) / (rightJaw.x - leftJaw.x);
-          livenessPassed = ratio < 0.42; // rotated towards left
+          livenessPassed = yawRatio < 0.44;
         } else if (activeChallenge.action === 'turn_right') {
-          const landmarks = detection.landmarks;
-          const nose = landmarks.getNose()[0];
-          const jaw = landmarks.getJawOutline();
-          const leftJaw = jaw[0];
-          const rightJaw = jaw[16];
-          const ratio = (nose.x - leftJaw.x) / (rightJaw.x - leftJaw.x);
-          livenessPassed = ratio > 0.58; // rotated towards right
+          livenessPassed = yawRatio > 0.56;
         } else if (activeChallenge.action === 'blink') {
-          // Check eye landmarks
-          const leftEye = detection.landmarks.getLeftEye();
-          const rightEye = detection.landmarks.getRightEye();
-          // Eye Aspect Ratio approx
-          const leftHeight = Math.abs(leftEye[1].y - leftEye[5].y) + Math.abs(leftEye[2].y - leftEye[4].y);
-          const leftWidth = Math.abs(leftEye[0].x - leftEye[3].x) * 2;
-          const leftEAR = leftHeight / (leftWidth || 1);
-          livenessPassed = leftEAR < 0.22 || expressions.neutral > 0.7; // Blink or sustained gaze
+          livenessPassed = leftEAR < 0.22 || (expressions.neutral || 0) > 0.7;
         }
       } else {
         livenessPassed = true;
@@ -161,15 +198,23 @@ class FaceVerificationService {
         box: { x: box.x, y: box.y, width: box.width, height: box.height },
         descriptor,
         expressions,
+        landmarks: {
+          yawRatio,
+          leftEAR,
+          smileScore,
+        },
+        lighting,
+        guidance,
         livenessPassed,
-        message: 'Face verified in view.',
+        message: guidance.isAligned ? 'Face aligned in view.' : guidance.message,
       };
     } catch (err) {
-      console.error('[FaceAPI] Real-time inference error:', err);
+      console.warn('[FaceAPI] Real-time inference notice:', err);
       return {
         detected: false,
         score: 0,
-        message: 'Face verification inference failed: ' + (err instanceof Error ? err.message : String(err)),
+        lighting,
+        message: 'Face detection in progress...',
       };
     }
   }
