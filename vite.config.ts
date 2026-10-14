@@ -12,6 +12,16 @@ export default defineConfig({
     port: 5173,
     host: true,
     allowedHosts: true,
+    hmr: {
+      clientPort: 443,
+    },
+    watch: {
+      ignored: ['**/server/data/**', '**/dist/**', '**/.git/**', '**/*.log'],
+    },
+    headers: {
+      'ngrok-skip-browser-warning': 'true',
+      'Access-Control-Allow-Origin': '*',
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:5000',
@@ -20,7 +30,7 @@ export default defineConfig({
       '/health': {
         target: 'http://localhost:5000',
         changeOrigin: true,
-      }
-    }
-  }
+      },
+    },
+  },
 })
