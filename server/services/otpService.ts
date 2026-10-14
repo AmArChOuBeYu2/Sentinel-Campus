@@ -2,6 +2,13 @@ import crypto from 'crypto';
 import { Resend } from 'resend';
 import { UserProfile, UserRole } from '../db';
 
+/**
+ * In-Memory Challenge Store Record
+ *
+ * NOTE: This in-memory OTP challenge store and rate limit maps are development
+ * and single-instance only. For production horizontal clustering or container
+ * restarts, migrate to a persistent, distributed store (e.g., Redis).
+ */
 export interface StoredOtpRecord {
   email: string;
   userId: string;
@@ -23,6 +30,7 @@ export interface RequestOtpResult {
   message: string;
   error?: string;
   status?: number;
+  messageId?: string;
   isSimulated?: boolean;
   simulatedOtp?: string;
 }
@@ -36,8 +44,6 @@ export interface VerifyOtpResult {
 
 class EmailOtpService {
   private resendClient: Resend | null = null;
-  private resendFromEmail: string;
-  private hmacSecret: string;
   private otpStore = new Map<string, StoredOtpRecord>();
   private rateLimitStore = new Map<string, RateLimitRecord>();
 
@@ -48,15 +54,47 @@ class EmailOtpService {
   private readonly MAX_VERIFICATION_ATTEMPTS = 5;
 
   constructor() {
+    this.initResendClient();
+  }
+
+  private initResendClient(): void {
     const apiKey = process.env.RESEND_API_KEY;
     if (apiKey && apiKey.trim()) {
       this.resendClient = new Resend(apiKey.trim());
     }
-    this.resendFromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
-    this.hmacSecret = process.env.JWT_SECRET || 'sentinel_campus_internal_hmac_secret_2026';
   }
 
-  // Refresh client if env changes at runtime
+  // Startup configuration validator
+  validateConfig(): { valid: boolean; warning?: string } {
+    const hmacSecret = process.env.OTP_HMAC_SECRET;
+    if (!hmacSecret || hmacSecret.trim().length < 16) {
+      return {
+        valid: false,
+        warning: 'OTP_HMAC_SECRET is missing or shorter than 16 characters in environment variables. OTP hashing will fail safely.',
+      };
+    }
+    const resendKey = process.env.RESEND_API_KEY;
+    if (!resendKey || !resendKey.trim()) {
+      return {
+        valid: false,
+        warning: 'RESEND_API_KEY is not configured. Live email delivery will be unavailable.',
+      };
+    }
+    return { valid: true };
+  }
+
+  private getHmacSecret(): string {
+    const secret = process.env.OTP_HMAC_SECRET;
+    if (!secret || !secret.trim()) {
+      throw new Error('FATAL: OTP_HMAC_SECRET environment variable is missing. Set a strong 32+ char secret in .env.');
+    }
+    return secret.trim();
+  }
+
+  getSenderEmail(): string {
+    return (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
+  }
+
   private getResend(): Resend | null {
     const apiKey = process.env.RESEND_API_KEY;
     if (apiKey && apiKey.trim()) {
@@ -70,16 +108,15 @@ class EmailOtpService {
 
   private hashOtp(otp: string, salt: string, userId: string, role: string): string {
     return crypto
-      .createHmac('sha256', this.hmacSecret)
+      .createHmac('sha256', this.getHmacSecret())
       .update(`${otp}:${salt}:${userId}:${role}`)
       .digest('hex');
   }
 
-  // Detect if input looks like a phone number rather than an email address
+  // Detect if credential looks like a phone number rather than an email address
   isPhoneCredential(credential: string): boolean {
     const trimmed = credential.trim();
     if (trimmed.includes('@')) return false;
-    // Numbers, spaces, +, -, parentheses
     return /^[\d\s\-+()]{7,16}$/.test(trimmed);
   }
 
@@ -116,7 +153,7 @@ class EmailOtpService {
     return { allowed: true };
   }
 
-  private recordRequest(key: string) {
+  private recordRequest(key: string): void {
     const now = Date.now();
     const record = this.rateLimitStore.get(key) || {
       lastRequestedAt: 0,
@@ -249,12 +286,18 @@ If you did not request this passcode, please contact campus security immediately
     const salt = crypto.randomBytes(16).toString('hex');
 
     // 3. Timing-attack resistant handling if user is not found or role mismatch
-    if (!user || (user.role !== requestedRole && user.role !== 'admin')) {
+    // Also verify that targetEmail matches user's registered primary or secondary email
+    const emailMatchesUser =
+      user &&
+      (user.email.toLowerCase() === normalizedEmail ||
+        user.secondaryEmail?.toLowerCase() === normalizedEmail);
+
+    if (!user || !emailMatchesUser || (user.role !== requestedRole && user.role !== 'admin')) {
       // Perform dummy hashing so execution time matches real user path
-      this.hashOtp(plainOtp, salt, 'dummy_user', requestedRole);
+      this.hashOtp(plainOtp, salt, 'dummy_user_id', requestedRole);
       this.recordRequest(normalizedEmail);
 
-      // Safe, uniform message: do not reveal if account exists
+      // Safe, uniform message: do not reveal if account exists (Requirement 4 & 7)
       return {
         success: true,
         message: 'If an active account is registered with this email for the selected role, a verification code has been dispatched.',
@@ -262,7 +305,7 @@ If you did not request this passcode, please contact campus security immediately
       };
     }
 
-    // 4. Hash and store bound to userId, email, and role
+    // 4. Hash and stage challenge bound to userId, email, and role
     const otpHash = this.hashOtp(plainOtp, salt, user.id, requestedRole);
     const storeKey = `${user.id}:${requestedRole}`;
 
@@ -282,13 +325,15 @@ If you did not request this passcode, please contact campus security immediately
 
     // 5. Send via Resend Email SDK
     const resend = this.getResend();
-    const isDev = process.env.NODE_ENV !== 'production';
-    const allowSimulated = process.env.ALLOW_SIMULATED_OTP === 'true' || isDev;
+    // Requirement 5: Simulated OTP enabled ONLY when BOTH NODE_ENV !== 'production' AND ALLOW_SIMULATED_OTP === 'true'
+    const allowSimulated =
+      process.env.NODE_ENV !== 'production' && process.env.ALLOW_SIMULATED_OTP === 'true';
 
     if (resend) {
       try {
+        const sender = this.getSenderEmail();
         const sendResult = await resend.emails.send({
-          from: this.resendFromEmail,
+          from: sender,
           to: normalizedEmail,
           subject: `[Sentinel Campus] Your Verification Passcode: ${plainOtp}`,
           html: this.createEmailHtml(plainOtp, user.fullName, requestedRole),
@@ -296,9 +341,28 @@ If you did not request this passcode, please contact campus security immediately
         });
 
         if (sendResult.error) {
-          console.warn('[Resend] API returned dispatch error:', sendResult.error.message);
-          // If Resend failed (e.g., free tier testing restricted to owner address), fall back to dev simulation if allowed
-          if (isDev && allowSimulated) {
+          // Log sanitized error (no API key or OTP) (Requirement 6)
+          console.warn('[Resend] API dispatch error:', {
+            name: sendResult.error.name,
+            statusCode: (sendResult.error as any).statusCode,
+            message: sendResult.error.message,
+          });
+
+          // Requirement 7: When email dispatch fails, invalidate the associated OTP challenge
+          this.otpStore.delete(storeKey);
+
+          if (allowSimulated) {
+            // Re-store challenge for simulated verification in explicit dev mode
+            this.otpStore.set(storeKey, {
+              email: normalizedEmail,
+              userId: user.id,
+              role: requestedRole,
+              otpHash,
+              salt,
+              expiresAt: now + this.OTP_EXPIRY_MS,
+              attemptsRemaining: this.MAX_VERIFICATION_ATTEMPTS,
+              createdAt: now,
+            });
             return {
               success: true,
               message: `[DEMO MODE - Resend Restricted] Passcode dispatched: ${plainOtp}`,
@@ -306,22 +370,40 @@ If you did not request this passcode, please contact campus security immediately
               simulatedOtp: plainOtp,
             };
           }
+
           return {
             success: false,
-            error: 'Failed to deliver authentication email through the institutional mail service.',
-            status: 502,
+            error: `Failed to deliver authentication email: ${sendResult.error.message}`,
+            status: (sendResult.error as any).statusCode || 502,
           };
         }
 
-        // Successfully delivered via Resend
+        // Successfully delivered via Resend (Requirement 6: Record message ID)
+        const messageId = sendResult.data?.id;
         return {
           success: true,
           message: `Verification passcode dispatched to ${normalizedEmail}. Please check your inbox.`,
+          messageId,
           isSimulated: false,
         };
       } catch (err: unknown) {
-        console.error('[Resend] Network/SDK exception:', (err as Error).message);
-        if (isDev && allowSimulated) {
+        const e = err as Error;
+        console.error('[Resend] Dispatch exception:', e.message);
+
+        // Invalidate challenge on error
+        this.otpStore.delete(storeKey);
+
+        if (allowSimulated) {
+          this.otpStore.set(storeKey, {
+            email: normalizedEmail,
+            userId: user.id,
+            role: requestedRole,
+            otpHash,
+            salt,
+            expiresAt: now + this.OTP_EXPIRY_MS,
+            attemptsRemaining: this.MAX_VERIFICATION_ATTEMPTS,
+            createdAt: now,
+          });
           return {
             success: true,
             message: `[DEMO MODE - Mail Exception] Passcode: ${plainOtp}`,
@@ -329,6 +411,7 @@ If you did not request this passcode, please contact campus security immediately
             simulatedOtp: plainOtp,
           };
         }
+
         return {
           success: false,
           error: 'Email delivery service temporarily unavailable. Please retry in a few moments.',
@@ -338,7 +421,19 @@ If you did not request this passcode, please contact campus security immediately
     }
 
     // If Resend API key is not configured:
-    if (isDev && allowSimulated) {
+    this.otpStore.delete(storeKey);
+
+    if (allowSimulated) {
+      this.otpStore.set(storeKey, {
+        email: normalizedEmail,
+        userId: user.id,
+        role: requestedRole,
+        otpHash,
+        salt,
+        expiresAt: now + this.OTP_EXPIRY_MS,
+        attemptsRemaining: this.MAX_VERIFICATION_ATTEMPTS,
+        createdAt: now,
+      });
       return {
         success: true,
         message: `[DEMO MODE - No Resend Key] Passcode generated: ${plainOtp}`,
@@ -349,12 +444,12 @@ If you did not request this passcode, please contact campus security immediately
 
     return {
       success: false,
-      error: 'Institutional email service is not configured. Please contact the administrator.',
+      error: 'Institutional email service is not configured (RESEND_API_KEY missing).',
       status: 500,
     };
   }
 
-  // Verify OTP
+  // Verify OTP (Requirement 9: Single-use, constant-time, 5 attempts max)
   verifyOtp(
     userId: string,
     requestedRole: UserRole,
@@ -426,8 +521,13 @@ If you did not request this passcode, please contact campus security immediately
     };
   }
 
+  // Check if a challenge is currently active (used by tests)
+  hasActiveChallenge(userId: string, role: UserRole): boolean {
+    return this.otpStore.has(`${userId}:${role}`);
+  }
+
   // Clear memory for testing purposes
-  resetStoreForTesting() {
+  resetStoreForTesting(): void {
     this.otpStore.clear();
     this.rateLimitStore.clear();
   }
@@ -438,7 +538,7 @@ If you did not request this passcode, please contact campus security immediately
     role: UserRole,
     plainOtp: string,
     options?: { isExpired?: boolean; attemptsRemaining?: number }
-  ) {
+  ): void {
     const salt = crypto.randomBytes(16).toString('hex');
     const otpHash = this.hashOtp(plainOtp, salt, userId, role);
     const storeKey = `${userId}:${role}`;

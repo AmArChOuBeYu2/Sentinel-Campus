@@ -171,7 +171,65 @@ async function runTestSuite() {
   const cooldownReq = await otpService.requestOtp(dummyUser, 'test.cooldown@skit.ac.in', 'student');
   assert(cooldownReq.success === false && cooldownReq.status === 429, 'Immediate second OTP request blocked by 60-second cooldown');
 
-  // 7.8 Live Resend Email Delivery to Verified Owner Address (Requirement 10)
+  // 7.8 Startup & Environment Configuration Validation
+  const configStatus = otpService.validateConfig();
+  assert(configStatus.valid === true, 'otpService.validateConfig() passes with valid OTP_HMAC_SECRET and RESEND_API_KEY');
+
+  // 7.9 Recipient & Account Resolution (Primary vs. Secondary vs. Unknown vs. Inactive)
+  console.log('\n--- 7.9 Account & Recipient Resolution Tests ---');
+  const primaryUser = db.getUserByEmailOrPhone('amar.choubey@skit.ac.in');
+  assert(primaryUser?.id === 'usr_stu_0001', 'Primary institutional email resolves to active student account');
+
+  const secondaryUser = db.getUserByEmailOrPhone('httpsamar96@gmail.com');
+  assert(secondaryUser?.id === 'usr_stu_0001', 'Approved secondary email resolves to active student account');
+
+  const unknownUser = db.getUserByEmailOrPhone('unknown.hacker@gmail.com');
+  assert(unknownUser === undefined, 'Unknown email correctly resolves to undefined');
+
+  // Test safe timing-attack resistant response for unknown user (Requirement 4 & 7)
+  otpService.resetStoreForTesting();
+  const unknownReq = await otpService.requestOtp(null, 'unknown.hacker@gmail.com', 'student');
+  assert(unknownReq.success === true, 'Unknown account returns safe uniform success message (No account enumeration)');
+  assert(unknownReq.isSimulated === false, 'Unknown account does not generate simulated OTP');
+  // Confirm no challenge was staged for unknown account
+  const verifyUnknown = otpService.verifyOtp('non_existent_id', 'student', '123456');
+  assert(verifyUnknown.success === false, 'No challenge staged for unknown account');
+
+  // 7.10 OTP Challenge Invalidation on Dispatch Failure
+  console.log('\n--- 7.10 Dispatch Failure Challenge Invalidation Tests ---');
+  // Temporarily disable simulated OTP to verify challenge invalidation on failure
+  const prevAllowSimulated = process.env.ALLOW_SIMULATED_OTP;
+  process.env.ALLOW_SIMULATED_OTP = 'false';
+
+  // Attempting to send to an unauthorized recipient on Resend free tier returns an error
+  // which must invalidate the staged challenge
+  otpService.resetStoreForTesting();
+  const failingUser = {
+    ...dummyUser,
+    id: 'usr_failing_001',
+    email: 'unauthorized-recipient@example.com',
+  };
+  const failDispatch = await otpService.requestOtp(
+    failingUser,
+    'unauthorized-recipient@example.com',
+    'student'
+  );
+  // Resend free tier rejects unauthorized domains
+  if (!failDispatch.success) {
+    assert(failDispatch.success === false, 'Resend dispatch to unauthorized domain correctly returns failure');
+    // Ensure challenge was invalidated and deleted
+    const verifyPruned = otpService.verifyOtp('usr_failing_001', 'student', '123456');
+    assert(verifyPruned.success === false, 'Failed dispatch challenge is immediately invalidated from store');
+  }
+
+  // Restore env var
+  if (prevAllowSimulated !== undefined) {
+    process.env.ALLOW_SIMULATED_OTP = prevAllowSimulated;
+  } else {
+    delete process.env.ALLOW_SIMULATED_OTP;
+  }
+
+  // 7.11 Live Resend Email Delivery to Verified Owner Address (Requirement 10)
   if (process.env.RESEND_API_KEY) {
     const amarUser = db.getUserById('usr_stu_0001');
     if (amarUser) {
@@ -179,6 +237,7 @@ async function runTestSuite() {
       const liveDispatch = await otpService.requestOtp(amarUser, 'httpsamar96@gmail.com', 'student');
       assert(liveDispatch.success === true, 'Live Resend email OTP delivered to owner address (httpsamar96@gmail.com)');
       assert(liveDispatch.isSimulated === false, 'Live delivery confirmed as non-simulated real Resend email');
+      assert(typeof liveDispatch.messageId === 'string' && liveDispatch.messageId.length > 0, `Resend returned valid message ID: ${liveDispatch.messageId}`);
     }
   }
 

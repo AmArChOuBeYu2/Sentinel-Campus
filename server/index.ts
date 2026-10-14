@@ -1,14 +1,19 @@
+import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import enrollmentRoutes from './routes/enrollment';
 import attendanceRoutes from './routes/attendance';
 import classesRoutes from './routes/classes';
 import adminRoutes from './routes/admin';
 import { db } from './db';
+import { otpService } from './services/otpService';
 
-dotenv.config();
+// Validate OTP & Resend configuration at startup
+const configValidation = otpService.validateConfig();
+if (!configValidation.valid) {
+  console.warn(`[Config] OTP Configuration Warning: ${configValidation.warning}`);
+}
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 5000;

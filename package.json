@@ -10,6 +10,7 @@
     "server:watch": "tsx watch server/index.ts",
     "build": "tsc -b && vite build",
     "test": "tsx server/__tests__/api.test.ts",
+    "test:resend": "tsx server/scripts/testResend.ts",
     "lint": "oxlint",
     "preview": "vite preview"
   },
