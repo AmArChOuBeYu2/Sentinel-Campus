@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Resend } from 'resend';
 import { UserProfile, UserRole } from '../db';
+import { getSupabaseClient } from './supabaseClient';
 
 /**
  * In-Memory Challenge Store Record
@@ -133,6 +134,64 @@ class EmailOtpService {
       return this.resendClient;
     }
     return null;
+  }
+
+  private async persistChallengeToDb(record: StoredOtpRecord): Promise<void> {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    try {
+      await supabase.from('otp_challenges').upsert({
+        id: `${record.userId}:${record.role}`,
+        user_id: record.userId,
+        role: record.role,
+        email: record.email,
+        otp_hash: record.otpHash,
+        salt: record.salt,
+        expires_at: new Date(record.expiresAt).toISOString(),
+        attempts_remaining: record.attemptsRemaining,
+        is_consumed: false,
+        created_at: new Date(record.createdAt).toISOString(),
+      });
+    } catch {
+      // Safe resilience against unmigrated schema
+    }
+  }
+
+  private async removeChallengeFromDb(userId: string, role: string): Promise<void> {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    try {
+      await supabase.from('otp_challenges').delete().eq('id', `${userId}:${role}`);
+    } catch {
+      // Safe resilience
+    }
+  }
+
+  private async markChallengeConsumedInDb(userId: string, role: string): Promise<void> {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    try {
+      await supabase
+        .from('otp_challenges')
+        .update({ is_consumed: true })
+        .eq('id', `${userId}:${role}`);
+    } catch {
+      // Safe resilience
+    }
+  }
+
+  private async persistRateLimitToDb(email: string, record: RateLimitRecord): Promise<void> {
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    try {
+      await supabase.from('otp_rate_limits').upsert({
+        email,
+        last_requested_at: new Date(record.lastRequestedAt).toISOString(),
+        request_timestamps: record.requestTimestamps.map((ts) => new Date(ts).toISOString()),
+      });
+    } catch {
+      // Safe resilience
+    }
   }
 
   private hashOtp(otp: string, salt: string, userId: string, role: string): string {
@@ -339,7 +398,7 @@ If you did not request this passcode, please contact campus security immediately
     const storeKey = `${user.id}:${requestedRole}`;
 
     const now = Date.now();
-    this.otpStore.set(storeKey, {
+    const challengeRecord: StoredOtpRecord = {
       email: normalizedEmail,
       userId: user.id,
       role: requestedRole,
@@ -348,9 +407,15 @@ If you did not request this passcode, please contact campus security immediately
       expiresAt: now + this.OTP_EXPIRY_MS,
       attemptsRemaining: this.MAX_VERIFICATION_ATTEMPTS,
       createdAt: now,
-    });
+    };
+    this.otpStore.set(storeKey, challengeRecord);
+    this.persistChallengeToDb(challengeRecord);
 
     this.recordRequest(normalizedEmail);
+    const rateRecord = this.rateLimitStore.get(normalizedEmail);
+    if (rateRecord) {
+      this.persistRateLimitToDb(normalizedEmail, rateRecord);
+    }
 
     // 5. Send via Resend Email SDK
     const resend = this.getResend();
@@ -420,6 +485,7 @@ If you did not request this passcode, please contact campus security immediately
       if (lastError || !sendResult || sendResult.error) {
         // Invalidate challenge immediately on email delivery failure
         this.otpStore.delete(storeKey);
+        this.removeChallengeFromDb(user.id, requestedRole);
 
         const errorObj = sendResult?.error || lastError;
         const statusCode = (errorObj as any)?.statusCode || (errorObj as any)?.status || 502;
@@ -522,6 +588,7 @@ If you did not request this passcode, please contact campus security immediately
     if (!isMatch) {
       if (record.attemptsRemaining <= 0) {
         this.otpStore.delete(storeKey);
+        this.removeChallengeFromDb(record.userId, record.role);
         return {
           success: false,
           error: 'Maximum verification attempts exceeded. For your security, this code has been invalidated. Please request a new code.',
@@ -539,6 +606,7 @@ If you did not request this passcode, please contact campus security immediately
 
     // 5. Enforce Single-Use: Immediately delete verified record
     this.otpStore.delete(storeKey);
+    this.markChallengeConsumedInDb(record.userId, record.role);
 
     return {
       success: true,

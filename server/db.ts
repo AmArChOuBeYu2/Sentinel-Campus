@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { supabaseSync } from './services/supabaseSync';
+import { getSupabaseConfig, testSupabaseConnectivity } from './services/supabaseClient';
 
 export type UserRole = 'student' | 'teacher' | 'staff' | 'admin';
 
@@ -532,9 +534,56 @@ function getInitialSeedData(): DatabaseSchema {
 
 class Database {
   private data: DatabaseSchema;
+  private storageDriver: 'supabase' | 'file' = 'file';
 
   constructor() {
+    this.storageDriver = this.resolveDriver();
     this.data = this.load();
+  }
+
+  private resolveDriver(): 'supabase' | 'file' {
+    if (process.env.STORAGE_DRIVER === 'file') return 'file';
+    const cfg = getSupabaseConfig();
+    return cfg.isConfigured ? 'supabase' : 'file';
+  }
+
+  getStorageDriver(): 'supabase' | 'file' {
+    return this.storageDriver;
+  }
+
+  async initSupabase(): Promise<{ driver: string; connected: boolean; tablesFound: boolean; error?: string }> {
+    const driver = this.resolveDriver();
+    this.storageDriver = driver;
+
+    if (process.env.NODE_ENV === 'production' && driver !== 'supabase') {
+      const msg = 'FATAL: Production mode strictly requires SUPABASE_URL and SUPABASE_SECRET_KEY. Ephemeral file storage is disabled in production.';
+      console.error(`[DB] ${msg}`);
+      throw new Error(msg);
+    }
+
+    if (driver === 'supabase') {
+      const conn = await testSupabaseConnectivity();
+      if (!conn.connected) {
+        if (process.env.NODE_ENV === 'production') {
+          throw new Error(`Production database connection failed: ${conn.error}`);
+        }
+        return { driver: 'file', connected: false, tablesFound: false, error: conn.error };
+      }
+
+      if (conn.tablesFound) {
+        const remoteData = await supabaseSync.loadFromSupabase();
+        if (remoteData && remoteData.users.length > 0) {
+          this.data = {
+            ...this.data,
+            ...remoteData,
+          };
+          console.log(`[DB] Initialized state from Supabase PostgreSQL (${this.data.users.length} users)`);
+          return { driver: 'supabase', connected: true, tablesFound: true };
+        }
+      }
+      return { driver: 'supabase', connected: true, tablesFound: Boolean(conn.tablesFound) };
+    }
+    return { driver: 'file', connected: false, tablesFound: false };
   }
 
   private load(): DatabaseSchema {
@@ -656,6 +705,7 @@ class Database {
     if (idx === -1) return null;
     this.data.users[idx] = { ...this.data.users[idx], ...updates };
     this.save(this.data);
+    supabaseSync.syncProfile(this.data.users[idx]);
     return this.data.users[idx];
   }
 
@@ -667,6 +717,7 @@ class Database {
     };
     this.data.users.push(newUser);
     this.save(this.data);
+    supabaseSync.syncProfile(newUser);
     return newUser;
   }
 
@@ -701,6 +752,7 @@ class Database {
       dimensions: descriptor.length,
     });
     this.save(this.data);
+    supabaseSync.syncEnrollment(newEnrollment);
     return newEnrollment;
   }
 
@@ -717,6 +769,7 @@ class Database {
       this.updateUser(userId, { isEnrolled: false });
       this.addAuditLog(userId, 'ENROLLMENT_RESET', 'WARNING', { userId });
       this.save(this.data);
+      supabaseSync.deleteEnrollment(userId);
     }
     return deleted;
   }
@@ -738,6 +791,7 @@ class Database {
     };
     this.addAuditLog(actorId, 'CAMPUS_CONFIG_UPDATED', 'SUCCESS', updates);
     this.save(this.data);
+    supabaseSync.syncCampusConfig(this.data.campusConfig);
     return this.data.campusConfig;
   }
 
@@ -894,6 +948,7 @@ class Database {
       expiresAt,
     });
     this.save(this.data);
+    supabaseSync.syncQRSession(qrSession);
     return qrSession;
   }
 
@@ -904,6 +959,7 @@ class Database {
     if (session.isActive && new Date().toISOString() > session.expiresAt) {
       session.isActive = false;
       this.save(this.data);
+      supabaseSync.syncQRSession(session);
     }
     return session;
   }
@@ -939,6 +995,7 @@ class Database {
 
     session.captures.unshift(capturedStudent);
     this.save(this.data);
+    supabaseSync.syncQRSession(session);
     return { success: true, capture: capturedStudent };
   }
 
@@ -952,6 +1009,7 @@ class Database {
         capturedCount: session.captures.length,
       });
       this.save(this.data);
+      supabaseSync.syncQRSession(session);
     }
     return session;
   }
@@ -1087,6 +1145,7 @@ class Database {
       reason,
     });
     this.save(this.data);
+    supabaseSync.syncManualReview(review);
     return review;
   }
 
@@ -1136,6 +1195,7 @@ class Database {
       adminNotes,
     });
     this.save(this.data);
+    supabaseSync.syncManualReview(rev);
     return rev;
   }
 
@@ -1190,6 +1250,7 @@ class Database {
     );
 
     this.save(this.data);
+    supabaseSync.syncAttendanceEvent(record);
     return record;
   }
 
@@ -1221,6 +1282,7 @@ class Database {
       this.data.auditLogs = this.data.auditLogs.slice(0, 500);
     }
     this.save(this.data);
+    supabaseSync.syncAuditLog(log);
     return log;
   }
 }

@@ -17,6 +17,8 @@ import {
 } from '../../src/services/livenessTracker';
 import { otpService } from '../services/otpService';
 import { ALLOWED_DEMO_ACCOUNTS } from '../routes/auth';
+import { getSupabaseConfig, testSupabaseConnectivity } from '../services/supabaseClient';
+import { runMigration } from '../scripts/migrateToSupabase';
 
 async function runTestSuite() {
   console.log('🧪 ========================================================');
@@ -897,6 +899,56 @@ async function runTestSuite() {
   const isProdBlocked = process.env.NODE_ENV === 'production';
   assert(isProdBlocked === true, 'Production environment check successfully triggered');
   process.env.NODE_ENV = prodEnvPrev;
+
+  // 17. Supabase Database Integration & Safe Migration Tests
+  console.log('\n--- 17. Supabase Database Integration & Safe Migration Tests ---');
+
+  // 17.1 Supabase Configuration Detection
+  const supabaseCfg = getSupabaseConfig();
+  assert(supabaseCfg.isConfigured === true, 'Supabase URL and secret/service keys configured via server-only env');
+  assert(supabaseCfg.url.startsWith('https://'), 'Supabase URL is valid HTTPS endpoint');
+  assert(process.env.VITE_SUPABASE_SECRET_KEY === undefined, 'Security: Supabase secret/service key is NOT exposed with VITE_ prefix');
+
+  // 17.2 Safe Database Storage Driver
+  const activeDriver = db.getStorageDriver();
+  assert(['supabase', 'file'].includes(activeDriver), `Database storage driver successfully resolved: ${activeDriver}`);
+
+  // 17.3 Supabase Endpoint Connectivity
+  const connTest = await testSupabaseConnectivity();
+  assert(connTest.connected === true, 'Successfully connected to remote Supabase endpoint via Supabase client');
+
+  // 17.4 Schema Migrations File Verification
+  const migrationFile = path.resolve(process.cwd(), 'supabase', 'migrations', '20261015000001_initial_schema.sql');
+  assert(fs.existsSync(migrationFile) === true, 'Version-controlled SQL migration file exists in supabase/migrations/');
+  const migrationSql = fs.readFileSync(migrationFile, 'utf-8');
+  assert(migrationSql.includes('CREATE TABLE IF NOT EXISTS public.profiles'), 'Migration creates public.profiles table');
+  assert(migrationSql.includes('CREATE TABLE IF NOT EXISTS public.biometric_enrollments'), 'Migration creates public.biometric_enrollments table');
+  assert(migrationSql.includes('CREATE TABLE IF NOT EXISTS public.attendance_events'), 'Migration creates public.attendance_events table');
+  assert(migrationSql.includes('CREATE TABLE IF NOT EXISTS public.qr_sessions'), 'Migration creates public.qr_sessions table');
+  assert(migrationSql.includes('CREATE TABLE IF NOT EXISTS public.otp_challenges'), 'Migration creates public.otp_challenges table');
+  assert(migrationSql.includes('ENABLE ROW LEVEL SECURITY'), 'Migration enables Row Level Security on all tables');
+
+  // 17.5 Migration Tool Backup & Idempotent Dry Run
+  const migrationDryRun = await runMigration({ dryRun: true });
+  assert(fs.existsSync(migrationDryRun.backupPath) === true, `Safe migration tool verified source backup at ${migrationDryRun.backupPath}`);
+  assert(migrationDryRun.summaries.length > 0, 'Migration tool dry-run successfully processed collection schemas');
+  const userSummary = migrationDryRun.summaries.find((s) => s.collection === 'Users / Profiles');
+  assert(userSummary !== undefined && userSummary.sourceCount === 6, 'Migration tool accurately detected 6 team demo user accounts');
+
+  // 17.6 Production Fail-Closed Safety Check
+  const prevEnv = process.env.NODE_ENV;
+  const prevUrl = process.env.SUPABASE_URL;
+  process.env.NODE_ENV = 'production';
+  delete process.env.SUPABASE_URL;
+  let prodFailedAsExpected = false;
+  try {
+    await db.initSupabase();
+  } catch {
+    prodFailedAsExpected = true;
+  }
+  assert(prodFailedAsExpected === true, 'Production strictly fails closed if Supabase configuration is missing');
+  process.env.NODE_ENV = prevEnv;
+  process.env.SUPABASE_URL = prevUrl;
 
   // Final cleanup so usr_stu_0001 returns to unenrolled baseline state
   db.resetEnrollment('usr_stu_0001');

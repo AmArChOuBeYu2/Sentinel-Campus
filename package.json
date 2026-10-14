@@ -11,10 +11,12 @@
     "build": "tsc -b && vite build",
     "test": "tsx server/__tests__/api.test.ts",
     "test:resend": "tsx server/scripts/testResend.ts",
+    "db:migrate": "tsx server/scripts/migrateToSupabase.ts",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.3",
     "@vladmandic/face-api": "^1.7.15",
     "clsx": "^2.1.1",
     "cors": "^2.8.6",

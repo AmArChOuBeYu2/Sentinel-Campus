@@ -42,8 +42,22 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Initialize Database & Supabase adapter
+db.initSupabase()
+  .then((status) => {
+    console.log(
+      `[Database] Driver: ${status.driver.toUpperCase()} | Supabase Connected: ${status.connected} | Tables: ${status.tablesFound}`
+    );
+  })
+  .catch((err) => {
+    console.error('[Database] Startup error:', err.message);
+    if (process.env.NODE_ENV === 'production') {
+      process.exit(1);
+    }
+  });
+
 // Health check endpoint
-app.get('/health', (_req: Request, res: Response) => {
+app.get('/health', async (_req: Request, res: Response) => {
   res.json({
     status: 'healthy',
     app: 'Sentinel Campus',
@@ -51,6 +65,10 @@ app.get('/health', (_req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
     campus: db.getCampusConfig().campusName,
     uptimeSeconds: Math.round(process.uptime()),
+    database: {
+      driver: db.getStorageDriver(),
+      isProduction: process.env.NODE_ENV === 'production',
+    },
   });
 });
 

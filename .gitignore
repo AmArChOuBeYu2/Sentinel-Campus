@@ -20,6 +20,8 @@ dist-ssr
 
 # Runtime Database and Generated Data
 server/data/*.json
+server/data/*.backup
+server/data/*.bak
 !server/data/.gitkeep
 
 # Private Biometric Data, Face Embeddings & Reference Images (Access-Controlled, Never Tracked)
