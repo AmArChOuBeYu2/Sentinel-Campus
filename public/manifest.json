@@ -1,0 +1,16 @@
+{
+  "short_name": "SentinelCampus",
+  "name": "Sentinel Campus: Smart Attendance",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192 512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#0b132b",
+  "theme_color": "#0b132b",
+  "display": "standalone",
+  "orientation": "portrait"
+}
