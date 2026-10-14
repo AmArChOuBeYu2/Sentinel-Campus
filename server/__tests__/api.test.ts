@@ -480,6 +480,100 @@ async function runTestSuite() {
   db.resetEnrollment('usr_stu_0001');
   assert(db.getUserById('usr_stu_0001')?.isEnrolled === false, 'Test enrollment cleaned up; baseline user returns to unenrolled');
 
+  // 13. Classroom QR Session & Mobile Student Attendance Capture Tests
+  console.log('\n--- 13. Classroom QR Session & Mobile Attendance Capture Tests ---');
+
+  const testTeacherId = 'usr_tch_0001';
+  const testClassId = 'cls_cs501';
+
+  // 13.1 Web dashboard creates QR session
+  const qrSession = db.createQRSession(testClassId, 'checkpoint_1', testTeacherId);
+  assert(qrSession.isActive === true, 'QR session created with active status');
+  assert(qrSession.token.length === 32, 'Session token is 32-character cryptographic hex string');
+  assert(qrSession.checkpointType === 'checkpoint_1', 'Session bound to checkpoint_1');
+  assert(qrSession.classId === testClassId, 'Session bound to requested class');
+  assert(qrSession.teacherId === testTeacherId, 'Session bound to authorized teacher');
+
+  // 13.2 Mobile app scans and retrieves QR session
+  const retrievedSession = db.getQRSessionByToken(qrSession.token);
+  assert(retrievedSession !== undefined, 'Mobile scanner retrieves active session by token');
+  assert(retrievedSession?.isActive === true, 'Retrieved session confirms active status');
+
+  // 13.3 Mobile app submits genuine student face capture
+  // Temporarily enroll Krishna Jha with a genuine vector for this test
+  db.saveEnrollment(
+    'usr_stu_0001',
+    genuineDescriptor,
+    'Classroom test biometric enrollment'
+  );
+
+  // Krishna's live mobile capture
+  const liveStudentCapture = genuineDescriptor.map((v) => v + 0.005);
+  const matchResult = db.matchStudentFace(liveStudentCapture);
+  assert(matchResult.status === 'confirmed', 'Genuine face capture matches enrolled student');
+  assert(matchResult.match?.id === 'usr_stu_0001', 'Matched student correctly identified as Krishna Jha');
+  assert(matchResult.distance < 0.55, `Euclidean distance ${matchResult.distance.toFixed(3)} is below 0.55 threshold`);
+
+  // Add capture to session
+  const captureRes = db.addStudentCaptureToSession(qrSession.token, {
+    studentId: matchResult.match!.id,
+    studentName: matchResult.match!.fullName,
+    identifierCode: matchResult.match!.identifierCode,
+    capturedAt: new Date().toISOString(),
+    faceDistance: matchResult.distance,
+    status: 'confirmed',
+    processingTimeMs: 42,
+    checkpointType: qrSession.checkpointType,
+  });
+  assert(captureRes.success === true, 'Student capture recorded into active session');
+
+  // Record verified attendance in ledger
+  const classAttendanceRecord = db.recordAttendance({
+    idempotencyKey: `test_cls_cap_${matchResult.match!.id}_${testClassId}_cp1_${Date.now()}`,
+    userId: matchResult.match!.id,
+    userName: matchResult.match!.fullName,
+    userRole: 'student',
+    identifierCode: matchResult.match!.identifierCode,
+    sessionType: 'class_session',
+    sessionId: testClassId,
+    checkpointType: 'checkpoint_1',
+    eventDate: campusLocalDate,
+    capturedAt: new Date().toISOString(),
+    serverVerifiedAt: new Date().toISOString(),
+    status: 'confirmed',
+    faceDistance: matchResult.distance,
+    isOfflineSubmission: false,
+  });
+  assert(classAttendanceRecord.status === 'confirmed', 'Class attendance recorded as confirmed in master ledger');
+
+  // 13.4 Duplicate prevention for same student in same checkpoint
+  const isDuplicate = db.findDuplicateAttendance(
+    'usr_stu_0001',
+    campusLocalDate,
+    'class_session',
+    'checkpoint_1',
+    testClassId
+  );
+  assert(isDuplicate !== undefined, 'Subsequent capture for same student & checkpoint detected as duplicate');
+
+  // 13.5 Unrecognized / Impostor face capture
+  const unrecognizedVector = Array.from({ length: 128 }, (_, i) => Math.cos(i * 0.4) * 0.3);
+  const unrecognizedMatch = db.matchStudentFace(unrecognizedVector);
+  assert(unrecognizedMatch.status === 'unmatched', 'Unregistered face correctly rejected as unmatched');
+  assert(unrecognizedMatch.match === null, 'No student identity attributed to unrecognized capture');
+
+  // 13.6 Teacher personal attendance isolation
+  const teacherHasClassAttendance = db.hasConfirmedPersonalAttendanceToday(testTeacherId, campusLocalDate);
+  assert(typeof teacherHasClassAttendance === 'boolean', 'Teacher personal attendance query functions independently');
+
+  // 13.7 Session closing by teacher
+  const closedSession = db.closeQRSession(qrSession.token, testTeacherId);
+  assert(closedSession?.isActive === false, 'Teacher can close classroom QR session');
+
+  // Final cleanup so usr_stu_0001 returns to unenrolled baseline state
+  db.resetEnrollment('usr_stu_0001');
+  assert(db.getUserById('usr_stu_0001')?.isEnrolled === false, 'Final cleanup: baseline user returns to unenrolled');
+
   if (failed > 0) {
     process.exit(1);
   }

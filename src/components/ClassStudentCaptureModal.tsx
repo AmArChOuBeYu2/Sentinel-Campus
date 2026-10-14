@@ -158,14 +158,18 @@ export const ClassStudentCaptureModal: React.FC<ClassStudentCaptureModalProps> =
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const thumbnailBase64 = canvas.toDataURL('image/jpeg', 0.85);
 
-      // Detect face descriptor
+      // Detect genuine face descriptor via face-api.js
       const detection = await faceService.detectFace(video);
-      let descriptor = detection.descriptor;
+      const descriptor = detection.descriptor;
 
-      // If detection didn't produce descriptor (e.g. models loading), generate a fallback descriptor
       if (!descriptor || descriptor.length !== 128) {
-        // Fallback: derive 128-dim normalized descriptor
-        descriptor = Array.from({ length: 128 }, (_, i) => Math.sin(i * 1.5) * 0.5);
+        setCaptureFeedback({
+          type: 'error',
+          title: 'No Face Detected',
+          message: detection.message || 'No face detected in camera frame. Ensure student is directly facing the camera.',
+        });
+        setCapturing(false);
+        return;
       }
 
       const res = await api.captureStudentAttendance(sessionToken, {

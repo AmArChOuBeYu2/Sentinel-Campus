@@ -237,12 +237,42 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
     return res.status(410).json({ success: false, error: 'QR capture session has expired or been closed.' });
   }
 
+  // Confirm teacher authorization
+  if (user.role === 'teacher' && session.teacherId !== user.id && user.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized: This classroom session belongs to another instructor.',
+    });
+  }
+
+  // Verify 5-minute expiration
+  const now = new Date();
+  if (now.toISOString() > session.expiresAt) {
+    return res.status(410).json({
+      success: false,
+      error: 'QR capture session has expired (5-minute window elapsed).',
+    });
+  }
+
   const { faceDescriptor, thumbnailUrl } = req.body;
 
   if (!faceDescriptor || !Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
     return res.status(400).json({
       success: false,
       error: 'Valid 128-d face descriptor embedding required from live camera capture.',
+    });
+  }
+
+  // Biometric integrity check: reject non-numbers, NaN, Infinity, all-zeros, flat vectors
+  const isCorrupted =
+    faceDescriptor.some((v) => isNaN(v) || !isFinite(v)) ||
+    faceDescriptor.every((v) => v === faceDescriptor[0]) ||
+    faceDescriptor.every((v) => v === 0);
+
+  if (isCorrupted) {
+    return res.status(400).json({
+      success: false,
+      error: 'Corrupted or fabricated face descriptor rejected by biometric integrity checks.',
     });
   }
 

@@ -41,14 +41,27 @@ export const ClassQRScannerModal: React.FC<ClassQRScannerModalProps> = ({
     setError(null);
 
     let cleanToken = tokenString.trim();
-    // Support JSON QR payload or raw string
-    try {
-      if (cleanToken.startsWith('{') && cleanToken.endsWith('}')) {
+    // Support URL with token parameter or path
+    if (cleanToken.includes('token=')) {
+      try {
+        const url = new URL(cleanToken, window.location.origin);
+        const t = url.searchParams.get('token');
+        if (t) cleanToken = t;
+      } catch {
+        const match = cleanToken.match(/[?&]token=([A-Za-z0-9_-]+)/);
+        if (match) cleanToken = match[1];
+      }
+    } else if (cleanToken.includes('/qr-session/')) {
+      const parts = cleanToken.split('/qr-session/');
+      if (parts[1]) cleanToken = parts[1].split('/')[0].split('?')[0];
+    } else if (cleanToken.startsWith('{') && cleanToken.endsWith('}')) {
+      // Support JSON QR payload
+      try {
         const parsed = JSON.parse(cleanToken);
         if (parsed.token) cleanToken = parsed.token;
+      } catch {
+        // not JSON, use cleanToken as-is
       }
-    } catch {
-      // not JSON, use cleanToken as-is
     }
 
     try {

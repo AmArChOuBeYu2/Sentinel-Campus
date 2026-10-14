@@ -12,8 +12,6 @@ import {
   ChevronRight,
   ShieldCheck,
   AlertCircle,
-  ExternalLink,
-  Laptop,
 } from 'lucide-react';
 import { UserProfile, CampusConfig, ClassSession, AttendanceEvent } from '../types';
 import { api } from '../services/api';
@@ -230,27 +228,38 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       </div>
 
-      {/* 4. Link to Teacher Laptop Web Console */}
-      <a
-        href="/teacher/console"
-        className="p-3.5 rounded-2xl bg-slate-900 text-white flex items-center justify-between shadow-sm hover:bg-slate-800 transition group cursor-pointer"
-      >
-        <div className="flex items-center space-x-3">
-          <div className="w-9 h-9 rounded-xl bg-slate-800 text-cyan-400 flex items-center justify-center border border-slate-700">
-            <Laptop className="w-5 h-5" />
-          </div>
-          <div>
-            <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-              <span>Open Teacher Laptop Console</span>
-              <ExternalLink className="w-3 h-3 text-cyan-400 opacity-80" />
-            </h4>
-            <p className="text-[10px] text-slate-400">
-              Display live classroom QR codes and view real-time capture roster
-            </p>
+      {/* 4. Primary Mobile Action: Scan Classroom QR Code */}
+      <div className="p-4 rounded-2xl bg-gradient-to-br from-[#800020] to-[#590016] text-white shadow-md shadow-[#800020]/20 space-y-3">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-2xl bg-white/10 backdrop-blur border border-white/20 flex items-center justify-center text-white shrink-0">
+              <QrCode className="w-5 h-5 text-amber-300" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-xs font-bold text-white tracking-tight">Scan Classroom QR</h3>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-300/30">
+                  Live Attendance
+                </span>
+              </div>
+              <p className="text-[11px] text-white/80 mt-0.5">
+                Scan the classroom QR displayed on your web dashboard to start capturing student faces.
+              </p>
+            </div>
           </div>
         </div>
-        <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition" />
-      </a>
+
+        <button
+          onClick={() => {
+            setActiveScanClass(null);
+            setIsQRScannerOpen(true);
+          }}
+          className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 text-[#800020] font-bold text-xs flex items-center justify-center space-x-2 transition shadow-sm cursor-pointer active:scale-[0.99]"
+        >
+          <Camera className="w-3.5 h-3.5 text-[#800020]" />
+          <span>Launch QR Scanner</span>
+        </button>
+      </div>
 
       {/* 5. Assigned Classes with "Scan Class QR" Workflow (Section 5 & 7 Requirements) */}
       <div className="space-y-3">
