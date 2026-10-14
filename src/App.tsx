@@ -19,6 +19,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { TeacherLaptopConsole } from './components/TeacherLaptopConsole';
 import { AttendanceModal } from './components/AttendanceModal';
 import { EnrollmentModal } from './components/EnrollmentModal';
+import { MandatoryAttendanceScreen } from './components/MandatoryAttendanceScreen';
 import { OfflineQueueDrawer } from './components/OfflineQueueDrawer';
 import { UserProfile, CampusConfig, AttendanceEvent, ClassSession } from './types';
 import { api } from './services/api';
@@ -29,6 +30,7 @@ import { ShieldCheck, RefreshCw } from 'lucide-react';
 function AppContent() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [gateUnlocked, setGateUnlocked] = useState<boolean>(false);
   const [campus, setCampus] = useState<CampusConfig>({
     campusName: DEFAULT_SKIT_COORDS.campusName,
     campusCode: 'SKIT-JAI-2026',
@@ -77,11 +79,19 @@ function AppContent() {
         const meRes = await api.getMe();
         if (meRes.success && meRes.user) {
           setUser(meRes.user);
+          if (meRes.user.role === 'admin') {
+            setGateUnlocked(true);
+          } else {
+            const gateRes = await api.getGateStatus().catch(() => null);
+            setGateUnlocked(!!(gateRes && gateRes.gateUnlocked));
+          }
         } else {
           setUser(null);
+          setGateUnlocked(false);
         }
       } else {
         setUser(null);
+        setGateUnlocked(false);
       }
 
       // Fetch Campus Config & Classes
@@ -95,6 +105,7 @@ function AppContent() {
     } catch (err) {
       console.warn('[App] Session init error:', err);
       setUser(null);
+      setGateUnlocked(false);
     } finally {
       setLoading(false);
     }
@@ -117,6 +128,7 @@ function AppContent() {
   const handleLogout = () => {
     api.setToken(null);
     setUser(null);
+    setGateUnlocked(false);
     navigate('/login');
   };
 
@@ -130,9 +142,11 @@ function AppContent() {
       setUser(res.user);
       triggerRefresh();
       if (res.user.role === 'admin') {
+        setGateUnlocked(true);
         navigate('/admin');
       } else {
-        navigate('/');
+        setGateUnlocked(false);
+        navigate('/verify-presence');
       }
     }
   };
@@ -174,8 +188,10 @@ function AppContent() {
             user ? (
               user.role === 'admin' ? (
                 <Navigate to="/admin" replace />
-              ) : (
+              ) : gateUnlocked ? (
                 <Navigate to="/" replace />
+              ) : (
+                <Navigate to="/verify-presence" replace />
               )
             ) : (
               <LoginScreen
@@ -183,9 +199,11 @@ function AppContent() {
                   setUser(authedUser);
                   triggerRefresh();
                   if (authedUser.role === 'admin') {
+                    setGateUnlocked(true);
                     navigate('/admin');
                   } else {
-                    navigate('/');
+                    setGateUnlocked(false);
+                    navigate('/verify-presence');
                   }
                 }}
               />
@@ -193,7 +211,32 @@ function AppContent() {
           }
         />
 
-        {/* Route 2: Isolated Admin Portal (/admin) - Dedicated Admin authentication & dashboard */}
+        {/* Route 2: Mandatory Personal Presence & Attendance Gate (/verify-presence) */}
+        <Route
+          path="/verify-presence"
+          element={
+            !user ? (
+              <Navigate to="/login" replace />
+            ) : user.role === 'admin' ? (
+              <Navigate to="/admin" replace />
+            ) : gateUnlocked ? (
+              <Navigate to="/" replace />
+            ) : (
+              <MandatoryAttendanceScreen
+                user={user}
+                onUnlocked={() => {
+                  setGateUnlocked(true);
+                  triggerRefresh();
+                  navigate('/');
+                }}
+                onLogout={handleLogout}
+                onOpenEnrollmentModal={() => setIsEnrollmentOpen(true)}
+              />
+            )
+          }
+        />
+
+        {/* Route 3: Isolated Admin Portal (/admin) - Dedicated Admin authentication & dashboard */}
         <Route
           path="/admin"
           element={
@@ -201,6 +244,7 @@ function AppContent() {
               <AdminLoginScreen
                 onAdminLoginSuccess={(adminUser) => {
                   setUser(adminUser);
+                  setGateUnlocked(true);
                   triggerRefresh();
                   navigate('/admin');
                 }}
@@ -228,7 +272,7 @@ function AppContent() {
           }
         />
 
-        {/* Route 3: Teacher Laptop Web Console (/teacher/console) */}
+        {/* Route 4: Teacher Laptop Web Console (/teacher/console) */}
         <Route
           path="/teacher/console"
           element={
@@ -241,7 +285,7 @@ function AppContent() {
           }
         />
 
-        {/* Route 4: Root (/) - Landing Page if unauthenticated; Role dashboard if authenticated */}
+        {/* Route 5: Root (/) - Landing Page if unauthenticated; Role dashboard if authenticated & gate verified */}
         <Route
           path="/"
           element={
@@ -249,6 +293,8 @@ function AppContent() {
               <LandingPage />
             ) : user.role === 'admin' ? (
               <Navigate to="/admin" replace />
+            ) : !gateUnlocked ? (
+              <Navigate to="/verify-presence" replace />
             ) : (
               <div className="flex flex-col min-h-screen">
                 <Navbar

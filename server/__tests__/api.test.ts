@@ -180,10 +180,13 @@ async function runTestSuite() {
   // 7.9 Recipient & Account Resolution (Primary vs. Secondary vs. Unknown vs. Inactive)
   console.log('\n--- 7.9 Account & Recipient Resolution Tests ---');
   const primaryUser = db.getUserByEmailOrPhone('amar.choubey@skit.ac.in');
-  assert(primaryUser?.id === 'usr_stu_0001', 'Primary institutional email resolves to active student account');
+  assert(primaryUser?.id === 'usr_tch_0001', 'Primary institutional email resolves to active teacher account');
 
   const secondaryUser = db.getUserByEmailOrPhone('httpsamar96@gmail.com');
-  assert(secondaryUser?.id === 'usr_stu_0001', 'Approved secondary email resolves to active student account');
+  assert(secondaryUser?.id === 'usr_tch_0001', 'Approved secondary email resolves to active teacher account');
+
+  const studentUser = db.getUserByEmailOrPhone('krishna.jha@skit.ac.in');
+  assert(studentUser?.id === 'usr_stu_0001', 'Student institutional email resolves to active student account (Krishna Jha)');
 
   const unknownUser = db.getUserByEmailOrPhone('unknown.hacker@gmail.com');
   assert(unknownUser === undefined, 'Unknown email correctly resolves to undefined');
@@ -233,10 +236,10 @@ async function runTestSuite() {
 
   // 7.11 Live Resend Email Delivery to Verified Owner Address (Requirement 10)
   if (process.env.RESEND_API_KEY) {
-    const amarUser = db.getUserById('usr_stu_0001');
+    const amarUser = db.getUserById('usr_tch_0001');
     if (amarUser) {
       otpService.resetStoreForTesting();
-      const liveDispatch = await otpService.requestOtp(amarUser, 'httpsamar96@gmail.com', 'student');
+      const liveDispatch = await otpService.requestOtp(amarUser, 'httpsamar96@gmail.com', 'teacher');
       assert(liveDispatch.success === true, 'Live Resend email OTP delivered to owner address (httpsamar96@gmail.com)');
       assert(liveDispatch.isSimulated === false, 'Live delivery confirmed as non-simulated real Resend email');
       assert(typeof liveDispatch.messageId === 'string' && liveDispatch.messageId.length > 0, `Resend returned valid message ID: ${liveDispatch.messageId}`);
@@ -246,14 +249,138 @@ async function runTestSuite() {
   // 7.12 Email Template & Privacy Verification (OTP in body, not subject)
   console.log('\n--- 7.12 Email Template Privacy & Placement Tests ---');
   const dummyOtp = '849201';
-  const htmlBody = (otpService as any).createEmailHtml(dummyOtp, 'Amar Choubey', 'student');
-  const textBody = (otpService as any).createEmailText(dummyOtp, 'Amar Choubey', 'student');
+  const htmlBody = (otpService as any).createEmailHtml(dummyOtp, 'Amar Choubey', 'teacher');
+  const textBody = (otpService as any).createEmailText(dummyOtp, 'Amar Choubey', 'teacher');
   assert(htmlBody.includes(dummyOtp), 'Email HTML body correctly contains OTP passcode');
   assert(textBody.includes(dummyOtp), 'Email text body correctly contains OTP passcode');
 
-  console.log('\n========================================================');
-  console.log(`🏁 TEST RESULTS: ${passed} PASSED | ${failed} FAILED`);
-  console.log('========================================================\n');
+  // 8. Team Profiles & Role Enforcement Tests
+  console.log('\n--- 8. Team Profiles & Role Enforcement Tests ---');
+  const krishna = db.getUserById('usr_stu_0001');
+  assert(krishna !== undefined && krishna.fullName === 'Krishna Jha' && krishna.role === 'student', 'Krishna Jha configured as Student (SC-STU-2026-0001)');
+  assert(krishna?.referenceImage === '/reference-images/krishna.jpeg', 'Krishna reference image configured correctly');
+  assert(krishna?.isEnrolled === true, 'Krishna is marked as enrolled with reference vector');
+
+  const amar = db.getUserById('usr_tch_0001');
+  assert(amar !== undefined && amar.fullName === 'Amar Choubey' && amar.role === 'teacher', 'Amar Choubey configured as Teacher (SC-TCH-2026-0001)');
+  assert(amar?.secondaryEmail === 'httpsamar96@gmail.com', 'Amar Choubey verified secondary email preserved');
+  assert(amar?.referenceImage === '/reference-images/amar.png', 'Amar reference image configured correctly');
+  assert(amar?.isEnrolled === false, 'Amar isEnrolled is false requiring genuine live enrollment due to AI-generated reference');
+
+  const sudhanshu = db.getUserById('usr_sta_0001');
+  assert(sudhanshu !== undefined && sudhanshu.fullName === 'Sudhanshu Kumar' && sudhanshu.role === 'staff', 'Sudhanshu Kumar configured as Staff (SC-STA-2026-0001)');
+  assert(sudhanshu?.referenceImage === '/reference-images/sudhanshu.jpeg', 'Sudhanshu reference image configured correctly');
+  assert(sudhanshu?.isEnrolled === true, 'Sudhanshu is marked as enrolled');
+
+  const chetan = db.getUserById('usr_sta_0002');
+  assert(chetan !== undefined && chetan.fullName === 'Chetan' && chetan.role === 'staff', 'Chetan configured as Staff (SC-STA-2026-0002)');
+  assert(chetan?.referenceImage === '/reference-images/chetan.jpeg', 'Chetan reference image configured correctly');
+  assert(chetan?.isEnrolled === true, 'Chetan is marked as enrolled');
+
+  const staff5 = db.getUserById('usr_sta_0003');
+  assert(staff5 !== undefined && staff5.role === 'staff', '5th team member configured as Staff (SC-STA-2026-0003)');
+  assert(staff5?.referenceImage === '/reference-images/staff5.jpeg', '5th member reference image configured correctly');
+  assert(staff5?.isEnrolled === true, '5th member is marked as enrolled');
+
+  // 9. Campus Network Trust & Subnet Validation Tests
+  console.log('\n--- 9. Campus Network Trust & Subnet Validation Tests ---');
+  const { networkAuthService } = await import('../services/networkAuthService');
+
+  // 9.1 Demo Mode
+  const demoReq = {
+    headers: {},
+    socket: { remoteAddress: '192.168.43.15' },
+    ip: '192.168.43.15',
+  } as any;
+  const demoResult = networkAuthService.validateNetwork(demoReq);
+  assert(demoResult.verified === true, 'Demo mode accepts local hotspot/testing connections');
+  assert(demoResult.isDemo === true, 'Demo mode flag accurately set in validation response');
+
+  // 9.2 Production / CIDR Fail-Closed Mode
+  const origMode = process.env.NETWORK_AUTH_MODE;
+  process.env.NETWORK_AUTH_MODE = 'cidr';
+  process.env.TRUSTED_NETWORK_CIDRS = '192.168.1.0/24,10.0.0.0/8';
+
+  const trustedReq = {
+    headers: { 'x-forwarded-for': '192.168.1.55' },
+    socket: { remoteAddress: '192.168.1.55' },
+  } as any;
+  const trustedResult = networkAuthService.validateNetwork(trustedReq);
+  assert(trustedResult.verified === true, 'CIDR mode accepts IP within trusted campus subnet 192.168.1.0/24');
+  assert(trustedResult.matchedCidr === '192.168.1.0/24', 'Matched CIDR properly returned');
+
+  const untrustedReq = {
+    headers: { 'x-forwarded-for': '203.0.113.88' },
+    socket: { remoteAddress: '203.0.113.88' },
+  } as any;
+  const untrustedResult = networkAuthService.validateNetwork(untrustedReq);
+  assert(untrustedResult.verified === false, 'CIDR mode fails closed and rejects external IP 203.0.113.88');
+  assert(untrustedResult.error?.includes('not connected to an authorized campus Wi-Fi') === true, 'Helpful error message returned for untrusted network');
+
+  // Restore network mode
+  if (origMode !== undefined) {
+    process.env.NETWORK_AUTH_MODE = origMode;
+  } else {
+    delete process.env.NETWORK_AUTH_MODE;
+  }
+
+  // 10. Mandatory Personal Presence & Same-Day Duplicate Prevention Tests
+  console.log('\n--- 10. Mandatory Personal Presence & Duplicate Prevention Tests ---');
+  const todayStr = new Date().toISOString().split('T')[0];
+  const testStudentIdPersonal = 'usr_stu_0001';
+
+  const personalRecord = db.recordAttendance({
+    idempotencyKey: `pers_test_${testStudentIdPersonal}_${Date.now()}`,
+    userId: testStudentIdPersonal,
+    userName: 'Krishna Jha',
+    userRole: 'student',
+    identifierCode: 'SC-STU-2026-0001',
+    sessionType: 'daily_personal',
+    checkpointType: 'entry',
+    eventDate: todayStr,
+    capturedAt: new Date().toISOString(),
+    serverVerifiedAt: new Date().toISOString(),
+    status: 'confirmed',
+    latitude: 26.8227,
+    longitude: 75.8647,
+    distanceMeters: 8,
+    locationAccuracy: 12,
+    faceDistance: 0.15,
+    isOfflineSubmission: false,
+  });
+  assert(personalRecord.status === 'confirmed', 'Daily personal presence attendance successfully confirmed and recorded');
+
+  const hasConfirmed = db.hasConfirmedPersonalAttendanceToday(testStudentIdPersonal, todayStr);
+  assert(hasConfirmed === true, 'hasConfirmedPersonalAttendanceToday correctly identifies confirmed personal attendance');
+
+  const retrievedPersonal = db.getTodayPersonalAttendance(testStudentIdPersonal, todayStr);
+  assert(retrievedPersonal?.id === personalRecord.id, 'getTodayPersonalAttendance retrieves original attendance event');
+
+  // 11. Supervisory Manual Review Lifecycle Tests
+  console.log('\n--- 11. Supervisory Manual Review Lifecycle Tests ---');
+  const newReview = db.createManualReview(
+    'usr_sta_0002',
+    'Camera aperture condensation caused low-light matching failure at Campus Gate 2.',
+    'data:image/jpeg;base64,mockChetanSnapshot'
+  );
+  assert(newReview.status === 'pending', 'Manual review created with pending status');
+  assert(newReview.userId === 'usr_sta_0002', 'Manual review linked to correct user (Chetan)');
+
+  const pendingList = db.getManualReviews();
+  assert(pendingList.some((r) => r.id === newReview.id), 'Pending review appears in getManualReviews()');
+
+  const resolvedReview = db.resolveManualReview(
+    newReview.id,
+    true,
+    'Prof. Ramesh K. Agarwal (Dean)',
+    'Identity verified visually by Campus Security Desk Supervisor.'
+  );
+  assert(resolvedReview?.status === 'approved', 'Manual review resolved with approved status');
+  assert(resolvedReview?.adminNotes === 'Identity verified visually by Campus Security Desk Supervisor.', 'Admin notes recorded in audit trail');
+
+  // Verify that resolving with approval automatically confirms attendance
+  const chetanPersonalAttendance = db.hasConfirmedPersonalAttendanceToday('usr_sta_0002', todayStr);
+  assert(chetanPersonalAttendance === true, 'Approving manual review automatically records confirmed personal attendance event');
 
   if (failed > 0) {
     process.exit(1);

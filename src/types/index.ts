@@ -15,6 +15,8 @@ export interface UserProfile {
   secondaryEmail?: string;
   semester?: string;
   section?: string;
+  referenceImage?: string;
+  enrollmentNote?: string;
 }
 
 export interface CampusConfig {
@@ -88,7 +90,7 @@ export interface AttendanceEvent {
   userName: string;
   userRole: UserRole;
   identifierCode: string;
-  sessionType: 'daily_staff' | 'class_session';
+  sessionType: 'daily_staff' | 'class_session' | 'daily_personal';
   sessionId?: string;
   checkpointType: 'entry' | 'checkpoint_1' | 'checkpoint_2';
   eventDate: string;
@@ -107,6 +109,40 @@ export interface AttendanceEvent {
   auditHash?: string;
 }
 
+export interface ManualReviewRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: UserRole;
+  identifierCode: string;
+  reason: string;
+  photoSnapshot?: string;
+  createdAt: string;
+  status: 'pending' | 'approved' | 'rejected';
+  resolvedAt?: string;
+  resolvedBy?: string;
+  adminNotes?: string;
+}
+
+export interface GateStatusResponse {
+  success: boolean;
+  attendanceRequired: boolean;
+  gateUnlocked: boolean;
+  isEnrolled: boolean;
+  enrollmentNote?: string;
+  todayAttendanceConfirmed: boolean;
+  todayRecord?: AttendanceEvent | null;
+  networkStatus?: {
+    verified: boolean;
+    mode: string;
+    isDemo: boolean;
+    message: string;
+    error?: string;
+    clientIp?: string;
+  };
+  message?: string;
+}
+
 export interface OfflineSubmission {
   id: string;
   idempotencyKey: string;
@@ -114,7 +150,7 @@ export interface OfflineSubmission {
   userName: string;
   userRole: UserRole;
   identifierCode: string;
-  sessionType: 'daily_staff' | 'class_session';
+  sessionType: 'daily_staff' | 'class_session' | 'daily_personal';
   sessionId?: string;
   checkpointType: 'entry' | 'checkpoint_1' | 'checkpoint_2';
   latitude: number;

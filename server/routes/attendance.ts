@@ -6,6 +6,7 @@ import {
   AttendanceEvent,
 } from '../db';
 import { getAuthenticatedUser } from './auth';
+import { networkAuthService } from '../services/networkAuthService';
 
 const router = Router();
 
@@ -360,6 +361,239 @@ router.post('/sync', (req: Request, res: Response) => {
     rejected: results.filter((r) => r.status === 'rejected').length,
     duplicates: results.filter((r) => r.status === 'duplicate').length,
     results,
+  });
+});
+
+// GET /api/attendance/gate-status - Check if authenticated user must complete mandatory attendance
+router.get('/gate-status', (req: Request, res: Response) => {
+  const user = getAuthenticatedUser(req);
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  // Admin users are exempt from daily personal attendance gate
+  if (user.role === 'admin') {
+    return res.json({
+      success: true,
+      attendanceRequired: false,
+      gateUnlocked: true,
+      isEnrolled: true,
+      todayAttendanceConfirmed: true,
+      message: 'Admin accounts bypass daily attendance gate.',
+    });
+  }
+
+  const enrollment = db.getEnrollmentByUserId(user.id);
+  const isEnrolled = !!(enrollment && enrollment.isActive);
+  const todayRecord = db.getTodayPersonalAttendance(user.id);
+  const todayAttendanceConfirmed = !!todayRecord;
+  const networkStatus = networkAuthService.validateNetwork(req);
+
+  return res.json({
+    success: true,
+    attendanceRequired: true,
+    gateUnlocked: todayAttendanceConfirmed,
+    isEnrolled,
+    enrollmentNote: user.enrollmentNote,
+    todayAttendanceConfirmed,
+    todayRecord: todayRecord || null,
+    networkStatus,
+  });
+});
+
+// POST /api/attendance/verify-personal-attendance - Mandatory Face & Network Attendance Flow
+router.post('/verify-personal-attendance', (req: Request, res: Response) => {
+  const user = getAuthenticatedUser(req);
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'Unauthorized. Authentication session required.' });
+  }
+
+  // Admin users are exempt from personal daily attendance gate
+  if (user.role === 'admin') {
+    return res.json({
+      success: true,
+      unlocked: true,
+      message: 'Admin accounts are exempt from daily personal attendance gate.',
+    });
+  }
+
+  const { faceDescriptor, latitude, longitude, locationAccuracy, livenessPassed, androidWifiPayload } = req.body;
+
+  // 1. Server-side Network Validation (Campus Wi-Fi / CIDR / Demo)
+  const networkResult = networkAuthService.validateNetwork(req, androidWifiPayload);
+  if (!networkResult.verified) {
+    db.addAuditLog(user.id, 'PERSONAL_ATTENDANCE_BLOCKED_NETWORK', 'FAILURE', {
+      networkError: networkResult.error,
+      clientIp: networkResult.clientIp,
+    });
+    return res.status(403).json({
+      success: false,
+      error: networkResult.error || 'Network verification failed. Connection to approved campus Wi-Fi network required.',
+      networkStatus: networkResult,
+    });
+  }
+
+  // 2. Biometric Enrollment Verification
+  const enrollment = db.getEnrollmentByUserId(user.id);
+  if (!enrollment || !enrollment.isActive) {
+    return res.status(400).json({
+      success: false,
+      code: 'ENROLLMENT_REQUIRED',
+      error: user.enrollmentNote || 'Biometric profile not enrolled. Genuine facial enrollment is required before attendance verification.',
+    });
+  }
+
+  // 3. Biometric Descriptor Payload Validation
+  if (!Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid or missing facial biometric vector. Live camera capture required.',
+    });
+  }
+
+  // 4. Biometric Face Distance Matching
+  const faceDistance = calculateEuclideanDistance(enrollment.descriptor, faceDescriptor);
+  if (faceDistance > FACE_MATCH_THRESHOLD) {
+    db.addAuditLog(user.id, 'PERSONAL_ATTENDANCE_FACE_MISMATCH', 'FAILURE', {
+      faceDistance: Number(faceDistance.toFixed(4)),
+      threshold: FACE_MATCH_THRESHOLD,
+    });
+    return res.status(401).json({
+      success: false,
+      error: `Facial identity verification failed (Distance: ${faceDistance.toFixed(3)} >= ${FACE_MATCH_THRESHOLD}). Face did not match enrolled profile.`,
+      faceDistance: Number(faceDistance.toFixed(4)),
+    });
+  }
+
+  // 5. Basic guided liveness validation
+  if (livenessPassed === false) {
+    return res.status(400).json({
+      success: false,
+      error: 'Guided liveness challenge failed. Please complete the prompt (e.g. natural blink or subtle head turn).',
+    });
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+
+  // 6. Check existing personal attendance for today (Duplicate Prevention)
+  const existingRecord = db.getTodayPersonalAttendance(user.id);
+  if (existingRecord) {
+    db.addAuditLog(user.id, 'PERSONAL_ATTENDANCE_CONFIRMED_SESSION', 'SUCCESS', {
+      attendanceId: existingRecord.id,
+      reverified: true,
+      networkMode: networkResult.mode,
+    });
+
+    return res.json({
+      success: true,
+      unlocked: true,
+      alreadyRecorded: true,
+      message: `Welcome back, ${user.fullName}. Today's attendance is already confirmed (${existingRecord.capturedAt}).`,
+      record: existingRecord,
+      networkStatus: networkResult,
+    });
+  }
+
+  // 7. Record new Personal Attendance
+  const campus = db.getCampusConfig();
+  const distMeters = (latitude !== undefined && longitude !== undefined)
+    ? calculateHaversineDistance(campus.latitude, campus.longitude, latitude, longitude)
+    : 0;
+
+  const record = db.recordAttendance({
+    idempotencyKey: `pers_${user.id}_${today}`,
+    userId: user.id,
+    userName: user.fullName,
+    userRole: user.role,
+    identifierCode: user.identifierCode,
+    sessionType: 'daily_personal',
+    checkpointType: 'entry',
+    eventDate: today,
+    capturedAt: new Date().toISOString(),
+    serverVerifiedAt: new Date().toISOString(),
+    status: 'confirmed',
+    latitude: latitude || campus.latitude,
+    longitude: longitude || campus.longitude,
+    distanceMeters: distMeters,
+    locationAccuracy: locationAccuracy || 10,
+    faceDistance: Number(faceDistance.toFixed(4)),
+    isOfflineSubmission: false,
+  });
+
+  return res.json({
+    success: true,
+    unlocked: true,
+    alreadyRecorded: false,
+    message: `Personal attendance verified & recorded successfully for ${user.fullName}. Dashboard unlocked.`,
+    record,
+    networkStatus: networkResult,
+  });
+});
+
+// POST /api/attendance/manual-review - Submit a review request for camera/mismatch exceptions
+router.post('/manual-review', (req: Request, res: Response) => {
+  const user = getAuthenticatedUser(req);
+  if (!user) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+
+  const { reason, photoSnapshot } = req.body;
+  if (!reason || typeof reason !== 'string' || reason.trim().length < 5) {
+    return res.status(400).json({
+      success: false,
+      error: 'Please provide a clear reason for administrative review (minimum 5 characters).',
+    });
+  }
+
+  const review = db.createManualReview(user.id, reason.trim(), photoSnapshot);
+  return res.json({
+    success: true,
+    message: 'Manual review request submitted to Campus Security & Administration. An authorized administrator will inspect your case.',
+    review,
+  });
+});
+
+// GET /api/attendance/manual-reviews - List review requests (Admin only)
+router.get('/manual-reviews', (req: Request, res: Response) => {
+  const user = getAuthenticatedUser(req);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Forbidden. Admin access required.' });
+  }
+
+  const reviews = db.getManualReviews();
+  return res.json({ success: true, reviews });
+});
+
+// POST /api/attendance/manual-reviews/:id/resolve - Resolve review request (Admin only)
+router.post('/manual-reviews/:id/resolve', (req: Request, res: Response) => {
+  const user = getAuthenticatedUser(req);
+  if (!user || user.role !== 'admin') {
+    return res.status(403).json({ success: false, error: 'Forbidden. Admin access required.' });
+  }
+
+  const { id } = req.params;
+  const { approved, notes } = req.body;
+
+  const result = db.resolveManualReview(id, !!approved, user.id, notes);
+  if (!result) {
+    return res.status(404).json({ success: false, error: 'Review request not found.' });
+  }
+
+  return res.json({
+    success: true,
+    message: `Review request ${id} ${approved ? 'approved' : 'rejected'}.`,
+    review: result,
+  });
+});
+
+// GET /api/attendance/network-status - Public network configuration
+router.get('/network-status', (req: Request, res: Response) => {
+  const config = networkAuthService.getPublicNetworkConfig();
+  const clientValidation = networkAuthService.validateNetwork(req);
+  return res.json({
+    success: true,
+    config,
+    clientValidation,
   });
 });
 

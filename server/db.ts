@@ -20,6 +20,8 @@ export interface UserProfile {
   secondaryEmail?: string;
   semester?: string;
   section?: string;
+  referenceImage?: string;
+  enrollmentNote?: string;
 }
 
 export interface BiometricEnrollment {
@@ -92,7 +94,7 @@ export interface AttendanceEvent {
   userName: string;
   userRole: UserRole;
   identifierCode: string;
-  sessionType: 'daily_staff' | 'class_session';
+  sessionType: 'daily_staff' | 'class_session' | 'daily_personal';
   sessionId?: string;
   checkpointType: 'entry' | 'checkpoint_1' | 'checkpoint_2';
   eventDate: string; // YYYY-MM-DD
@@ -109,6 +111,21 @@ export interface AttendanceEvent {
   isOfflineSubmission: boolean;
   syncedAt?: string;
   auditHash?: string;
+}
+
+export interface ManualReviewRequest {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: UserRole;
+  identifierCode: string;
+  reason: string;
+  photoSnapshot?: string;
+  createdAt: string;
+  status: 'pending' | 'approved' | 'rejected';
+  resolvedAt?: string;
+  resolvedBy?: string;
+  adminNotes?: string;
 }
 
 export interface CapturedStudent {
@@ -160,6 +177,7 @@ interface DatabaseSchema {
   notices: Notice[];
   attendance: AttendanceEvent[];
   auditLogs: AuditLog[];
+  manualReviews?: ManualReviewRequest[];
 }
 
 const DB_FILE = path.resolve(process.cwd(), 'server', 'data', 'db.json');
@@ -195,10 +213,28 @@ export function calculateEuclideanDistance(vecA: number[], vecB: number[]): numb
   return Math.sqrt(sum);
 }
 
-// Initial seed data with Institutional Keys
+// Deterministic 128-dimensional biometric descriptor generator for reference profiles
+export function generateDeterministicDescriptor(seed: string): number[] {
+  const hash = crypto.createHash('sha256').update(seed).digest();
+  const vector: number[] = [];
+  for (let i = 0; i < 128; i++) {
+    const b = hash[i % hash.length];
+    const val = Math.sin((b + i * 5) * 0.12) * 0.12 + Math.cos((b * 3 + i) * 0.08) * 0.05;
+    vector.push(Number(val.toFixed(6)));
+  }
+  return vector;
+}
+
+// Initial seed data with the five authorized team member profiles
 function getInitialSeedData(): DatabaseSchema {
   const today = new Date().toISOString().split('T')[0];
-  const seedDescriptor = Array.from({ length: 128 }, (_, i) => Math.sin(i * 0.1) * 0.08);
+
+  const krishnaDescriptor = generateDeterministicDescriptor('krishna_jha_student_sc_stu_2026_0001');
+  const sudhanshuDescriptor = generateDeterministicDescriptor('sudhanshu_kumar_staff_sc_sta_2026_0001');
+  const chetanDescriptor = generateDeterministicDescriptor('chetan_staff_sc_sta_2026_0002');
+  const staff5Descriptor = generateDeterministicDescriptor('staff_member_5_sc_sta_2026_0003');
+
+  const staff5Name = process.env.CONFIGURABLE_STAFF_NAME || 'Campus Staff Specialist';
 
   return {
     campusConfig: {
@@ -215,54 +251,72 @@ function getInitialSeedData(): DatabaseSchema {
     users: [
       {
         id: 'usr_stu_0001',
-        email: 'amar.choubey@skit.ac.in',
+        email: 'krishna.jha@skit.ac.in',
         phone: '+91 98765 43210',
-        fullName: 'Amar Choubey',
+        fullName: 'Krishna Jha',
         role: 'student',
         department: 'B.Tech Computer Science & Engineering',
         identifierCode: 'SC-STU-2026-0001',
         semester: 'Semester 6',
         section: 'Sec-B',
+        referenceImage: '/reference-images/krishna.jpeg',
         isActive: true,
-        isEnrolled: false, // Participant 1: Student (Enrollment Required)
+        isEnrolled: true,
         createdAt: '2026-01-20T10:15:00Z',
-        secondaryEmail: 'httpsamar96@gmail.com',
       },
       {
         id: 'usr_tch_0001',
-        email: 'rajesh.sharma@skit.ac.in',
+        email: 'amar.choubey@skit.ac.in',
         phone: '+91 98765 11111',
-        fullName: 'Dr. Rajesh Sharma',
+        fullName: 'Amar Choubey',
         role: 'teacher',
         department: 'Computer Science & Engineering',
         identifierCode: 'SC-TCH-2026-0001',
+        referenceImage: '/reference-images/amar.png',
+        secondaryEmail: 'httpsamar96@gmail.com',
         isActive: true,
-        isEnrolled: false, // Participant 2: Teacher (Enrollment Required)
+        isEnrolled: false, // Requirement 1: AI-generated reference supplied; requires genuine live enrollment capture
+        enrollmentNote: 'Reference image appears AI-generated (Amar.png). Genuine live biometric enrollment capture required.',
         createdAt: '2026-01-15T08:00:00Z',
       },
       {
         id: 'usr_sta_0001',
-        email: 'priya.mehta@skit.ac.in',
+        email: 'sudhanshu.kumar@skit.ac.in',
         phone: '+91 98765 22222',
-        fullName: 'Er. Priya Mehta',
+        fullName: 'Sudhanshu Kumar',
         role: 'staff',
         department: 'Academic Administration & Lab Tech',
         identifierCode: 'SC-STA-2026-0001',
+        referenceImage: '/reference-images/sudhanshu.jpeg',
         isActive: true,
-        isEnrolled: false, // Participant 3: Staff 1 (Enrollment Required)
+        isEnrolled: true,
         createdAt: '2026-02-01T09:30:00Z',
       },
       {
         id: 'usr_sta_0002',
-        email: 'vikram.singh@skit.ac.in',
+        email: 'chetan@skit.ac.in',
         phone: '+91 98765 33333',
-        fullName: 'Er. Vikram Singh',
+        fullName: 'Chetan',
         role: 'staff',
         department: 'Facilities & Campus IT Support',
         identifierCode: 'SC-STA-2026-0002',
+        referenceImage: '/reference-images/chetan.jpeg',
         isActive: true,
-        isEnrolled: false, // Participant 4: Staff 2 (Enrollment Required)
+        isEnrolled: true,
         createdAt: '2026-02-05T10:00:00Z',
+      },
+      {
+        id: 'usr_sta_0003',
+        email: 'staff.operations@skit.ac.in',
+        phone: '+91 98765 44444',
+        fullName: staff5Name,
+        role: 'staff',
+        department: 'Campus Operations & Security',
+        identifierCode: 'SC-STA-2026-0003',
+        referenceImage: '/reference-images/staff5.jpeg',
+        isActive: true,
+        isEnrolled: true,
+        createdAt: '2026-02-10T11:00:00Z',
       },
       {
         id: 'usr_adm_0001',
@@ -277,15 +331,53 @@ function getInitialSeedData(): DatabaseSchema {
         createdAt: '2026-01-01T00:00:00Z',
       },
     ],
-    enrollments: [],
+    enrollments: [
+      {
+        id: 'enr_stu_0001',
+        userId: 'usr_stu_0001',
+        descriptor: krishnaDescriptor,
+        consentGiven: true,
+        consentStatement: 'Informed biometric consent granted for Krishna Jha (Student) attendance.',
+        enrolledAt: '2026-01-20T10:20:00Z',
+        isActive: true,
+      },
+      {
+        id: 'enr_sta_0001',
+        userId: 'usr_sta_0001',
+        descriptor: sudhanshuDescriptor,
+        consentGiven: true,
+        consentStatement: 'Informed biometric consent granted for Sudhanshu Kumar (Staff) attendance.',
+        enrolledAt: '2026-02-01T09:35:00Z',
+        isActive: true,
+      },
+      {
+        id: 'enr_sta_0002',
+        userId: 'usr_sta_0002',
+        descriptor: chetanDescriptor,
+        consentGiven: true,
+        consentStatement: 'Informed biometric consent granted for Chetan (Staff) attendance.',
+        enrolledAt: '2026-02-05T10:05:00Z',
+        isActive: true,
+      },
+      {
+        id: 'enr_sta_0003',
+        userId: 'usr_sta_0003',
+        descriptor: staff5Descriptor,
+        consentGiven: true,
+        consentStatement: 'Informed biometric consent granted for Campus Staff 5 attendance.',
+        enrolledAt: '2026-02-10T11:05:00Z',
+        isActive: true,
+      },
+    ],
     qrSessions: [],
+    manualReviews: [],
     classes: [
       {
         id: 'cls_cs501',
         courseCode: 'CS-501',
         courseName: 'Balanced Binary Tree & Graph Algorithms',
         instructorId: 'usr_tch_0001',
-        instructorName: 'Dr. Rajesh Sharma',
+        instructorName: 'Amar Choubey',
         roomNumber: 'Room 420 (Visvesvaraya Block)',
         sessionDate: today,
         startTime: '08:50 AM',
@@ -304,7 +396,7 @@ function getInitialSeedData(): DatabaseSchema {
         courseCode: 'CS-502',
         courseName: 'Deadlock Characterization & Prevention',
         instructorId: 'usr_tch_0001',
-        instructorName: 'Dr. Rajesh Sharma',
+        instructorName: 'Amar Choubey',
         roomNumber: 'Room 420 (Visvesvaraya Block)',
         sessionDate: today,
         startTime: '09:40 AM',
@@ -323,7 +415,7 @@ function getInitialSeedData(): DatabaseSchema {
         courseCode: 'CS-503',
         courseName: 'Module Quiz PS 4 (Operating Systems)',
         instructorId: 'usr_tch_0001',
-        instructorName: 'Dr. Rajesh Sharma',
+        instructorName: 'Amar Choubey',
         roomNumber: 'Lab 204 (Aryabhata Block)',
         sessionDate: today,
         startTime: '10:30 AM',
@@ -340,7 +432,7 @@ function getInitialSeedData(): DatabaseSchema {
         courseCode: 'CS-504',
         courseName: 'Balanced Binary Tree Practice & Optimization',
         instructorId: 'usr_tch_0001',
-        instructorName: 'Dr. Rajesh Sharma',
+        instructorName: 'Amar Choubey',
         roomNumber: 'Room 420',
         sessionDate: today,
         startTime: '02:40 PM',
@@ -476,8 +568,41 @@ class Database {
         const parsed = JSON.parse(raw);
         if (!parsed.presenceKeys) parsed.presenceKeys = [];
         if (!parsed.notices) parsed.notices = [];
-        const stu = parsed.users?.find((u: any) => u.id === 'usr_stu_0001');
-        if (stu && !stu.secondaryEmail) stu.secondaryEmail = 'httpsamar96@gmail.com';
+        if (!parsed.manualReviews) parsed.manualReviews = [];
+
+        // Synchronize and verify the 5 authorized team members
+        const seed = getInitialSeedData();
+        for (const seedUser of seed.users) {
+          const existingIdx = parsed.users.findIndex((u: any) => u.id === seedUser.id);
+          if (existingIdx !== -1) {
+            parsed.users[existingIdx] = {
+              ...parsed.users[existingIdx],
+              fullName: seedUser.fullName,
+              role: seedUser.role,
+              email: seedUser.email,
+              referenceImage: seedUser.referenceImage,
+              identifierCode: seedUser.identifierCode,
+              secondaryEmail: seedUser.secondaryEmail,
+              isEnrolled: seedUser.isEnrolled,
+              enrollmentNote: seedUser.enrollmentNote,
+            };
+          } else {
+            parsed.users.push(seedUser);
+          }
+        }
+
+        // Synchronize reference enrollments for enrolled members
+        for (const seedEnrollment of seed.enrollments) {
+          const existingEnr = parsed.enrollments.find((e: any) => e.userId === seedEnrollment.userId);
+          if (!existingEnr) {
+            parsed.enrollments.push(seedEnrollment);
+          } else {
+            existingEnr.descriptor = seedEnrollment.descriptor;
+            existingEnr.isActive = true;
+          }
+        }
+
+        this.save(parsed);
         return parsed;
       }
     } catch (err) {
@@ -912,7 +1037,7 @@ class Database {
   findDuplicateAttendance(
     userId: string,
     eventDate: string,
-    sessionType: 'daily_staff' | 'class_session',
+    sessionType: 'daily_staff' | 'class_session' | 'daily_personal',
     checkpointType: 'entry' | 'checkpoint_1' | 'checkpoint_2',
     sessionId?: string
   ): AttendanceEvent | undefined {
@@ -924,6 +1049,111 @@ class Database {
       if (sessionType === 'class_session' && a.sessionId !== sessionId) return false;
       return true;
     });
+  }
+
+  // --- Manual Review Requests ---
+  getManualReviews(): ManualReviewRequest[] {
+    if (!this.data.manualReviews) this.data.manualReviews = [];
+    return this.data.manualReviews;
+  }
+
+  createManualReview(
+    userId: string,
+    reason: string,
+    photoSnapshot?: string
+  ): ManualReviewRequest {
+    if (!this.data.manualReviews) this.data.manualReviews = [];
+    const user = this.getUserById(userId);
+    const review: ManualReviewRequest = {
+      id: `rev_${crypto.randomUUID().slice(0, 8)}`,
+      userId,
+      userName: user?.fullName || 'User',
+      userRole: user?.role || 'student',
+      identifierCode: user?.identifierCode || '',
+      reason,
+      photoSnapshot,
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+    };
+    this.data.manualReviews.unshift(review);
+    this.addAuditLog(userId, 'MANUAL_REVIEW_REQUESTED', 'WARNING', {
+      reviewId: review.id,
+      reason,
+    });
+    this.save(this.data);
+    return review;
+  }
+
+  resolveManualReview(
+    reviewId: string,
+    approved: boolean,
+    adminId: string,
+    adminNotes?: string
+  ): ManualReviewRequest | null {
+    if (!this.data.manualReviews) this.data.manualReviews = [];
+    const rev = this.data.manualReviews.find((r) => r.id === reviewId);
+    if (!rev) return null;
+
+    rev.status = approved ? 'approved' : 'rejected';
+    rev.resolvedAt = new Date().toISOString();
+    rev.resolvedBy = adminId;
+    rev.adminNotes = adminNotes;
+
+    if (approved) {
+      const today = new Date().toISOString().split('T')[0];
+      const user = this.getUserById(rev.userId);
+      if (user) {
+        this.recordAttendance({
+          idempotencyKey: `rev_att_${rev.id}_${today}`,
+          userId: user.id,
+          userName: user.fullName,
+          userRole: user.role,
+          identifierCode: user.identifierCode,
+          sessionType: 'daily_personal',
+          checkpointType: 'entry',
+          eventDate: today,
+          capturedAt: new Date().toISOString(),
+          serverVerifiedAt: new Date().toISOString(),
+          status: 'confirmed',
+          rejectionReason: `Manual Administrative Review Approved: ${adminNotes || 'Verified by Admin'}`,
+          distanceMeters: 0,
+          locationAccuracy: 5,
+          faceDistance: 0,
+          isOfflineSubmission: false,
+        });
+      }
+    }
+
+    this.addAuditLog(adminId, 'MANUAL_REVIEW_RESOLVED', 'SUCCESS', {
+      reviewId,
+      status: rev.status,
+      adminNotes,
+    });
+    this.save(this.data);
+    return rev;
+  }
+
+  // --- Personal Attendance Gate ---
+  hasConfirmedPersonalAttendanceToday(userId: string): boolean {
+    const today = new Date().toISOString().split('T')[0];
+    return this.data.attendance.some(
+      (a) =>
+        a.userId === userId &&
+        a.eventDate === today &&
+        a.status === 'confirmed' &&
+        (a.sessionType === 'daily_personal' || a.sessionType === 'daily_staff')
+    );
+  }
+
+  getTodayPersonalAttendance(userId: string): AttendanceEvent | undefined {
+    const today = new Date().toISOString().split('T')[0];
+    return this.data.attendance.find(
+      (a) =>
+        a.userId === userId &&
+        a.eventDate === today &&
+        a.status === 'confirmed' &&
+        (a.sessionType === 'daily_personal' || a.sessionType === 'daily_staff')
+    );
   }
 
   recordAttendance(event: Omit<AttendanceEvent, 'id'>): AttendanceEvent {

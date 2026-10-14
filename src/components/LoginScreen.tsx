@@ -23,7 +23,7 @@ interface LoginScreenProps {
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [stage, setStage] = useState<'role_select' | 'auth'>('role_select');
   const [selectedRole, setSelectedRole] = useState<UserRole>('student');
-  const [credential, setCredential] = useState('amar.choubey@skit.ac.in');
+  const [credential, setCredential] = useState('krishna.jha@skit.ac.in');
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
   const [simulatedOtp, setSimulatedOtp] = useState<string | null>(null);
@@ -40,11 +40,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     setSimulatedOtp(null);
 
     if (role === 'student') {
-      setCredential('amar.choubey@skit.ac.in');
+      setCredential('krishna.jha@skit.ac.in');
     } else if (role === 'teacher') {
-      setCredential('rajesh.sharma@skit.ac.in');
+      setCredential('amar.choubey@skit.ac.in');
     } else if (role === 'staff') {
-      setCredential('priya.mehta@skit.ac.in');
+      setCredential('sudhanshu.kumar@skit.ac.in');
     }
     setStage('auth');
   };
@@ -388,14 +388,14 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               <span className="font-mono text-[#800020] font-bold">1-Click</span>
             </div>
 
-            <div className="grid grid-cols-3 gap-1.5 text-[10px]">
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 text-[10px]">
               <button
                 type="button"
                 onClick={() => handleQuickDemo('usr_stu_0001')}
                 className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Student</div>
-                <div className="text-[9px] text-slate-500 truncate">Amar Choubey</div>
+                <div className="text-[9px] text-slate-500 truncate">Krishna Jha</div>
               </button>
 
               <button
@@ -404,7 +404,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                 className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Teacher</div>
-                <div className="text-[9px] text-slate-500 truncate">Dr. Rajesh Sharma</div>
+                <div className="text-[9px] text-slate-500 truncate">Amar Choubey</div>
               </button>
 
               <button
@@ -412,8 +412,26 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                 onClick={() => handleQuickDemo('usr_sta_0001')}
                 className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
-                <div className="font-bold">Staff</div>
-                <div className="text-[9px] text-slate-500 truncate">Er. Priya Mehta</div>
+                <div className="font-bold">Staff 1</div>
+                <div className="text-[9px] text-slate-500 truncate">Sudhanshu K.</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleQuickDemo('usr_sta_0002')}
+                className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
+              >
+                <div className="font-bold">Staff 2</div>
+                <div className="text-[9px] text-slate-500 truncate">Chetan</div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleQuickDemo('usr_sta_0003')}
+                className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
+              >
+                <div className="font-bold">Staff 3</div>
+                <div className="text-[9px] text-slate-500 truncate">Configurable</div>
               </button>
             </div>
           </div>

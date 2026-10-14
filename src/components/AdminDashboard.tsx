@@ -23,6 +23,7 @@ import {
   CampusConfig,
   AttendanceEvent,
   AuditLog,
+  ManualReviewRequest,
 } from '../types';
 import { api } from '../services/api';
 
@@ -33,7 +34,7 @@ interface AdminDashboardProps {
   refreshTrigger: number;
 }
 
-type AdminTab = 'attendance' | 'users' | 'campus_config' | 'audit' | 'system';
+type AdminTab = 'attendance' | 'users' | 'campus_config' | 'audit' | 'system' | 'manual_reviews';
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   campus,
@@ -82,6 +83,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Audit Logs
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+
+  // Manual Review Requests
+  const [manualReviews, setManualReviews] = useState<ManualReviewRequest[]>([]);
+  const [loadingReviews, setLoadingReviews] = useState(false);
+  const [reviewActionLoading, setReviewActionLoading] = useState<string | null>(null);
 
   // System Diagnostics
   const [diagnostics, setDiagnostics] = useState<Record<string, unknown> | null>(null);
@@ -133,6 +139,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  // Load Manual Reviews
+  const loadManualReviews = async () => {
+    setLoadingReviews(true);
+    try {
+      const res = await api.getManualReviews();
+      if (res.success) {
+        setManualReviews(res.reviews);
+      }
+    } catch (err) {
+      console.error('[Admin] Manual reviews load error:', err);
+    } finally {
+      setLoadingReviews(false);
+    }
+  };
+
+  // Resolve Manual Review
+  const handleResolveReview = async (id: string, action: 'approved' | 'rejected') => {
+    const defaultNote = action === 'approved' ? 'Identity verified by supervisor' : 'Biometric identification rejected';
+    const note = window.prompt(`Enter administrative notes for ${action}:`, defaultNote);
+    if (note === null) return;
+    setReviewActionLoading(id);
+    try {
+      await api.resolveManualReview(id, action === 'approved', note);
+      await loadManualReviews();
+      await loadAttendance();
+      await loadOverview();
+    } catch (err: unknown) {
+      const e = err as Error;
+      alert('Failed to resolve review: ' + e.message);
+    } finally {
+      setReviewActionLoading(null);
+    }
+  };
+
   // Load Audit
   const loadAudit = async () => {
     try {
@@ -161,6 +201,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     loadOverview();
     loadAttendance();
     loadUsers();
+    loadManualReviews();
     loadAudit();
     loadDiagnostics();
     setCampusForm(campus);
@@ -367,6 +408,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         >
           <Activity className="w-4 h-4" />
           <span>System Diagnostics</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('manual_reviews')}
+          className={`flex items-center space-x-2 px-4 py-2 text-xs font-bold rounded-lg transition cursor-pointer shrink-0 ${
+            activeTab === 'manual_reviews'
+              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+              : 'text-slate-400 hover:text-white hover:bg-slate-800'
+          }`}
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          <span>Manual Reviews</span>
+          {manualReviews.filter(r => r.status === 'pending').length > 0 && (
+            <span className="ml-1 px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950 font-black text-[10px]">
+              {manualReviews.filter(r => r.status === 'pending').length}
+            </span>
+          )}
         </button>
       </div>
 
@@ -858,6 +916,140 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="text-slate-400">Tamper Protection Protocol:</span>
                 <span className="text-cyan-400 font-bold">{String(diagnostics.tamperProtection)}</span>
               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 6: MANUAL REVIEWS */}
+      {activeTab === 'manual_reviews' && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#1c2541]/40 border border-slate-800 p-4 rounded-xl">
+            <div>
+              <h3 className="text-base font-bold text-white flex items-center space-x-2">
+                <span>Biometric &amp; Presence Manual Exception Reviews</span>
+                <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                  {manualReviews.filter((r) => r.status === 'pending').length} Pending
+                </span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Supervisory override queue for camera glitches, illumination failures, or hardware exceptions.
+              </p>
+            </div>
+            <button
+              onClick={loadManualReviews}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 transition self-start sm:self-auto cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Refresh Queue</span>
+            </button>
+          </div>
+
+          {loadingReviews ? (
+            <div className="text-center py-12 text-slate-400 text-xs">
+              <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-cyan-400" />
+              Loading review requests...
+            </div>
+          ) : manualReviews.length === 0 ? (
+            <div className="text-center py-12 border border-slate-800/80 rounded-2xl bg-[#1c2541]/20">
+              <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto mb-3 opacity-60" />
+              <h4 className="text-sm font-bold text-slate-200">No Review Requests</h4>
+              <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                No users have requested manual presence verification review. Automated biometric verification is running smoothly.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {manualReviews.map((req) => (
+                <div
+                  key={req.id}
+                  className={`p-4 rounded-xl border transition ${
+                    req.status === 'pending'
+                      ? 'bg-[#1c2541]/70 border-amber-500/40'
+                      : req.status === 'approved'
+                      ? 'bg-slate-900/60 border-emerald-500/30 opacity-80'
+                      : 'bg-slate-900/60 border-rose-500/30 opacity-70'
+                  }`}
+                >
+                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                    <div className="flex items-start space-x-3">
+                      {req.photoSnapshot ? (
+                        <img
+                          src={req.photoSnapshot}
+                          alt={req.userName}
+                          className="w-16 h-16 rounded-xl object-cover border border-slate-700 bg-slate-950 shrink-0"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-500 text-xs shrink-0">
+                          No Photo
+                        </div>
+                      )}
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm font-bold text-white">{req.userName}</span>
+                          <span className="text-xs font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-800/50">
+                            {req.identifierCode}
+                          </span>
+                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
+                            {req.userRole}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-300 mt-2 bg-slate-950/50 p-2.5 rounded-lg border border-slate-800">
+                          <span className="text-slate-400 font-semibold block text-[10px] uppercase tracking-wider mb-0.5">
+                            Reported Issue / Reason:
+                          </span>
+                          {req.reason}
+                        </p>
+                        <div className="text-[11px] text-slate-500 mt-2 flex items-center space-x-3">
+                          <span>Submitted: {new Date(req.createdAt).toLocaleString()}</span>
+                          {req.resolvedAt && (
+                            <span>• Resolved: {new Date(req.resolvedAt).toLocaleString()} by {req.resolvedBy || 'Admin'}</span>
+                          )}
+                        </div>
+                        {req.adminNotes && (
+                          <p className="text-xs text-emerald-400/90 mt-1 italic">
+                            Admin Note: &ldquo;{req.adminNotes}&rdquo;
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col items-end justify-between self-stretch shrink-0">
+                      <span
+                        className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                          req.status === 'pending'
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50'
+                            : req.status === 'approved'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50'
+                            : 'bg-rose-500/20 text-rose-300 border border-rose-500/50'
+                        }`}
+                      >
+                        {req.status}
+                      </span>
+
+                      {req.status === 'pending' && (
+                        <div className="flex items-center space-x-2 mt-4">
+                          <button
+                            onClick={() => handleResolveReview(req.id, 'rejected')}
+                            disabled={reviewActionLoading === req.id}
+                            className="px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 text-xs font-bold transition disabled:opacity-50 cursor-pointer"
+                          >
+                            Reject
+                          </button>
+                          <button
+                            onClick={() => handleResolveReview(req.id, 'approved')}
+                            disabled={reviewActionLoading === req.id}
+                            className="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-slate-950 text-xs font-black transition disabled:opacity-50 cursor-pointer flex items-center space-x-1"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            <span>Approve &amp; Confirm</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

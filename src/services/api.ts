@@ -187,6 +187,102 @@ class ApiService {
     });
   }
 
+  // --- Mandatory Personal Attendance & Gating ---
+  async getGateStatus(): Promise<{
+    success: boolean;
+    attendanceRequired: boolean;
+    gateUnlocked: boolean;
+    isEnrolled: boolean;
+    enrollmentNote?: string;
+    todayAttendanceConfirmed: boolean;
+    todayRecord?: AttendanceEvent | null;
+    networkStatus?: {
+      verified: boolean;
+      mode: string;
+      isDemo: boolean;
+      message: string;
+      error?: string;
+      clientIp?: string;
+    };
+    message?: string;
+  }> {
+    return this.request('/attendance/gate-status');
+  }
+
+  async verifyPersonalAttendance(payload: {
+    faceDescriptor: number[];
+    latitude?: number;
+    longitude?: number;
+    locationAccuracy?: number;
+    livenessPassed?: boolean;
+    androidWifiPayload?: {
+      ssid?: string;
+      bssid?: string;
+      gatewayIp?: string;
+      networkSignature?: string;
+    };
+  }): Promise<{
+    success: boolean;
+    unlocked: boolean;
+    alreadyRecorded: boolean;
+    message: string;
+    record: AttendanceEvent;
+    networkStatus: any;
+    error?: string;
+  }> {
+    return this.request('/attendance/verify-personal-attendance', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async submitManualReview(reason: string, photoSnapshot?: string): Promise<{
+    success: boolean;
+    message: string;
+    review: any;
+  }> {
+    return this.request('/attendance/manual-review', {
+      method: 'POST',
+      body: JSON.stringify({ reason, photoSnapshot }),
+    });
+  }
+
+  async getManualReviews(): Promise<{ success: boolean; reviews: any[] }> {
+    return this.request('/attendance/manual-reviews');
+  }
+
+  async resolveManualReview(id: string, approved: boolean | 'approved' | 'rejected', notes?: string): Promise<{
+    success: boolean;
+    message: string;
+    review: any;
+  }> {
+    const isApproved = typeof approved === 'boolean' ? approved : approved === 'approved';
+    return this.request(`/attendance/manual-reviews/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ approved: isApproved, notes }),
+    });
+  }
+
+  async getNetworkStatus(): Promise<{
+    success: boolean;
+    config: {
+      authMode: string;
+      isDemoMode: boolean;
+      trustedSSIDs: string[];
+      notice: string;
+    };
+    clientValidation: {
+      verified: boolean;
+      mode: string;
+      isDemo: boolean;
+      message: string;
+      error?: string;
+      clientIp?: string;
+    };
+  }> {
+    return this.request('/attendance/network-status');
+  }
+
   // --- Classes & Presence Keys ---
   async getCurrentClasses(): Promise<{ success: boolean; classes: ClassSession[] }> {
     return this.request('/classes/current');
