@@ -109,6 +109,7 @@ export async function runMigration(options?: {
   }
 
   const summaries: MigrationSummary[] = [];
+  const validUserIds = new Set((rawData.users || []).map((u) => u.id));
 
   // Helper for batch upserts
   async function migrateCollection<T>(
@@ -116,7 +117,8 @@ export async function runMigration(options?: {
     tableName: string,
     records: T[],
     mapFn: (item: T) => Record<string, unknown>,
-    idField: string = 'id'
+    idField: string = 'id',
+    filterFn?: (item: T) => { accept: boolean; reason?: string }
   ): Promise<MigrationSummary> {
     const summary: MigrationSummary = {
       collection: collectionName,
@@ -133,14 +135,20 @@ export async function runMigration(options?: {
       return summary;
     }
 
-    if (options?.dryRun) {
-      summary.migratedCount = records.length;
-      summaries.push(summary);
-      console.log(`🔍 [DRY RUN] [${collectionName}] ${records.length} records verified for upsert.`);
-      return summary;
-    }
-
     for (const record of records) {
+      if (filterFn) {
+        const filterResult = filterFn(record);
+        if (!filterResult.accept) {
+          summary.skippedCount++;
+          continue;
+        }
+      }
+
+      if (options?.dryRun) {
+        summary.migratedCount++;
+        continue;
+      }
+
       try {
         const payload = mapFn(record);
         const { error } = await client!.from(tableName).upsert(payload, {
@@ -160,9 +168,15 @@ export async function runMigration(options?: {
       }
     }
 
-    console.log(
-      `  [${collectionName}] Source: ${summary.sourceCount} | Migrated: ${summary.migratedCount} | Conflicts: ${summary.conflictCount}`
-    );
+    if (options?.dryRun) {
+      console.log(
+        `🔍 [DRY RUN] [${collectionName}] Source: ${summary.sourceCount} | Verified: ${summary.migratedCount} | Skipped: ${summary.skippedCount}`
+      );
+    } else {
+      console.log(
+        `  [${collectionName}] Source: ${summary.sourceCount} | Migrated: ${summary.migratedCount} | Skipped: ${summary.skippedCount} | Conflicts: ${summary.conflictCount}`
+      );
+    }
     summaries.push(summary);
     return summary;
   }
@@ -214,10 +228,17 @@ export async function runMigration(options?: {
       created_at: u.createdAt || new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }),
-    'id'
+    'id',
+    (u) => {
+      if (!u.emailVerified) {
+        console.log(`  [Notice] Seeded user ${u.fullName} (${u.id}) has unverified email: ${u.email} (persisting as email_verified: false)`);
+      }
+      return { accept: true };
+    }
   );
 
   // --- Step 3C: Biometric Enrollments ---
+  // Safely guard against synthetic/test descriptors or orphaned enrollments
   await migrateCollection(
     'Biometric Enrollments',
     'biometric_enrollments',
@@ -232,7 +253,16 @@ export async function runMigration(options?: {
       updated_at: new Date().toISOString(),
       is_active: e.isActive !== false,
     }),
-    'id'
+    'id',
+    (e) => {
+      if (!validUserIds.has(e.userId) || e.userId.startsWith('test_')) {
+        return { accept: false, reason: `Orphaned/test user ${e.userId}` };
+      }
+      if (!e.descriptor || !Array.isArray(e.descriptor) || e.descriptor.length !== 128) {
+        return { accept: false, reason: `Invalid descriptor dimensions for ${e.userId}` };
+      }
+      return { accept: true };
+    }
   );
 
   // --- Step 3D: Class Sessions ---
@@ -293,7 +323,13 @@ export async function runMigration(options?: {
       audit_hash: a.auditHash || null,
       created_at: a.serverVerifiedAt || new Date().toISOString(),
     }),
-    'id'
+    'id',
+    (a) => {
+      if (!validUserIds.has(a.userId) || a.userId.startsWith('test_')) {
+        return { accept: false, reason: `Orphaned/test user ${a.userId}` };
+      }
+      return { accept: true };
+    }
   );
 
   // --- Step 3F: QR Sessions ---
