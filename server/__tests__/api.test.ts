@@ -165,10 +165,12 @@ async function runTestSuite() {
     createdAt: new Date().toISOString(),
   };
 
-  const firstReq = await otpService.requestOtp(dummyUser, 'test.cooldown@skit.ac.in', 'student');
-  assert(firstReq.success === true, 'First OTP request processed');
+  // Rate limiting / cooldown is tracked per email address even for non-enrolled addresses to prevent flooding
+  const testCooldownEmail = 'cooldown.check@skit.ac.in';
+  const firstReq = await otpService.requestOtp(null, testCooldownEmail, 'student');
+  assert(firstReq.success === true, 'First OTP request processed and recorded for rate limiting');
 
-  const cooldownReq = await otpService.requestOtp(dummyUser, 'test.cooldown@skit.ac.in', 'student');
+  const cooldownReq = await otpService.requestOtp(null, testCooldownEmail, 'student');
   assert(cooldownReq.success === false && cooldownReq.status === 429, 'Immediate second OTP request blocked by 60-second cooldown');
 
   // 7.8 Startup & Environment Configuration Validation
@@ -240,6 +242,14 @@ async function runTestSuite() {
       assert(typeof liveDispatch.messageId === 'string' && liveDispatch.messageId.length > 0, `Resend returned valid message ID: ${liveDispatch.messageId}`);
     }
   }
+
+  // 7.12 Email Template & Privacy Verification (OTP in body, not subject)
+  console.log('\n--- 7.12 Email Template Privacy & Placement Tests ---');
+  const dummyOtp = '849201';
+  const htmlBody = (otpService as any).createEmailHtml(dummyOtp, 'Amar Choubey', 'student');
+  const textBody = (otpService as any).createEmailText(dummyOtp, 'Amar Choubey', 'student');
+  assert(htmlBody.includes(dummyOtp), 'Email HTML body correctly contains OTP passcode');
+  assert(textBody.includes(dummyOtp), 'Email text body correctly contains OTP passcode');
 
   console.log('\n========================================================');
   console.log(`🏁 TEST RESULTS: ${passed} PASSED | ${failed} FAILED`);

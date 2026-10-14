@@ -335,7 +335,7 @@ If you did not request this passcode, please contact campus security immediately
         const sendResult = await resend.emails.send({
           from: sender,
           to: normalizedEmail,
-          subject: `[Sentinel Campus] Your Verification Passcode: ${plainOtp}`,
+          subject: '[Sentinel Campus] Your Verification Passcode',
           html: this.createEmailHtml(plainOtp, user.fullName, requestedRole),
           text: this.createEmailText(plainOtp, user.fullName, requestedRole),
         });
