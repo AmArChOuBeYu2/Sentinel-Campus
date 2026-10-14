@@ -28,6 +28,28 @@ router.post('/', (req: Request, res: Response) => {
     });
   }
 
+  // Production Fail-Closed Policy:
+  // Server-side face recognition runtime (@tensorflow/tfjs-node) is absent from this Node.js environment.
+  // When in production mode or when REQUIRE_SERVER_BIOMETRICS is enabled, client-generated descriptors must fail closed safely.
+  const isProductionBiometricEnforced =
+    process.env.NODE_ENV === 'production' || process.env.REQUIRE_SERVER_BIOMETRICS === 'true';
+
+  if (isProductionBiometricEnforced) {
+    db.addAuditLog(currentUser.id, 'BIOMETRIC_ENROLLMENT_FAIL_CLOSED_PRODUCTION', 'WARNING', {
+      targetUserId: targetId,
+      message: 'Client-supplied descriptor rejected under production biometric security policy',
+    });
+    return res.status(503).json({
+      success: false,
+      error: 'Production security policy: Server-side facial landmark inference runtime (@tensorflow/tfjs-node) is not loaded. Client-supplied descriptors cannot be registered as production biometric enrollment.',
+      biometricTier: {
+        mode: 'prototype_client_descriptor',
+        isProductionSecure: false,
+        failClosed: true,
+      },
+    });
+  }
+
   if (!Array.isArray(descriptor) || descriptor.length !== 128) {
     return res.status(400).json({
       success: false,
@@ -35,15 +57,43 @@ router.post('/', (req: Request, res: Response) => {
     });
   }
 
-  // Validate values in descriptor are real finite numbers
-  const hasInvalidValues = descriptor.some((n) => typeof n !== 'number' || !Number.isFinite(n) || isNaN(n));
-  const allIdentical = descriptor.every((v) => Math.abs(v - descriptor[0]) < 1e-7);
-  const vectorMagnitude = Math.sqrt(descriptor.reduce((sum, v) => sum + v * v, 0));
+  // Validate descriptor integrity: finite numbers, plausible range [-2.0, 2.0], non-flat, magnitude in [0.3, 2.0]
+  let sumSquares = 0;
+  const firstVal = descriptor[0];
+  let allEqual = true;
 
-  if (hasInvalidValues || allIdentical || vectorMagnitude === 0) {
+  for (let i = 0; i < 128; i++) {
+    const v = descriptor[i];
+    if (typeof v !== 'number' || isNaN(v) || !Number.isFinite(v)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Corrupted face descriptor: contains non-numeric, NaN, or non-finite values.',
+      });
+    }
+    if (Math.abs(v) > 2.0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Corrupted face descriptor: component value exceeds plausible biometric range [-2.0, 2.0].',
+      });
+    }
+    if (v !== firstVal) {
+      allEqual = false;
+    }
+    sumSquares += v * v;
+  }
+
+  if (allEqual) {
     return res.status(400).json({
       success: false,
-      error: 'Fabricated or invalid biometric embedding rejected. Genuine model capture required.',
+      error: 'Fabricated uniform flat vector rejected by biometric integrity checks.',
+    });
+  }
+
+  const magnitude = Math.sqrt(sumSquares);
+  if (magnitude < 0.3 || magnitude > 2.0) {
+    return res.status(400).json({
+      success: false,
+      error: `Fabricated or unpopulated vector: magnitude (${magnitude.toFixed(2)}) is outside plausible face embedding range [0.3, 2.0].`,
     });
   }
 
@@ -61,6 +111,11 @@ router.post('/', (req: Request, res: Response) => {
       userId: enrollment.userId,
       enrolledAt: enrollment.enrolledAt,
       consentGiven: enrollment.consentGiven,
+    },
+    biometricTier: {
+      mode: 'prototype_client_descriptor',
+      isProductionSecure: false,
+      notice: 'Prototype mode: Descriptor computed on client browser. Not for production biometric verification.',
     },
   });
 });

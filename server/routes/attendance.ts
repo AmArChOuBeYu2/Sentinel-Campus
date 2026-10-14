@@ -28,8 +28,43 @@ interface SubmissionPayload {
   isOfflineSubmission?: boolean;
 }
 
+export function validateDescriptorIntegrity(descriptor: unknown): { valid: boolean; error?: string } {
+  if (!descriptor || !Array.isArray(descriptor) || descriptor.length !== 128) {
+    return { valid: false, error: 'Valid 128-d face descriptor embedding required from live camera capture.' };
+  }
+
+  let sumSquares = 0;
+  const firstVal = descriptor[0];
+  let allEqual = true;
+
+  for (let i = 0; i < 128; i++) {
+    const v = descriptor[i];
+    if (typeof v !== 'number' || isNaN(v) || !isFinite(v)) {
+      return { valid: false, error: 'Corrupted face descriptor: contains non-numeric, NaN, or non-finite values.' };
+    }
+    if (Math.abs(v) > 2.0) {
+      return { valid: false, error: 'Corrupted face descriptor: component value exceeds plausible biometric range [-2.0, 2.0].' };
+    }
+    if (v !== firstVal) {
+      allEqual = false;
+    }
+    sumSquares += v * v;
+  }
+
+  if (allEqual) {
+    return { valid: false, error: 'Fabricated uniform flat vector rejected by biometric integrity checks.' };
+  }
+
+  const magnitude = Math.sqrt(sumSquares);
+  if (magnitude < 0.3 || magnitude > 2.0) {
+    return { valid: false, error: `Fabricated or unpopulated vector: magnitude (${magnitude.toFixed(2)}) is outside plausible face embedding range [0.3, 2.0].` };
+  }
+
+  return { valid: true };
+}
+
 // Validation helper
-function validateAttendanceSubmission(
+export function validateAttendanceSubmission(
   userId: string,
   payload: SubmissionPayload
 ): {
@@ -37,6 +72,7 @@ function validateAttendanceSubmission(
   rejectionReason?: string;
   distanceMeters: number;
   faceDistance: number;
+  biometricTier?: Record<string, unknown>;
 } {
   const campus = db.getCampusConfig();
 
@@ -96,6 +132,27 @@ function validateAttendanceSubmission(
   }
 
   // 4. Biometric Face Verification
+  // Production Fail-Closed Policy:
+  // Server-side face recognition runtime (e.g. @tensorflow/tfjs-node or Python sidecar) is absent from this Node.js environment.
+  // When in production mode or when REQUIRE_SERVER_BIOMETRICS is enabled, client-generated descriptors must fail closed safely.
+  const isProductionBiometricEnforced =
+    process.env.NODE_ENV === 'production' || process.env.REQUIRE_SERVER_BIOMETRICS === 'true';
+
+  if (isProductionBiometricEnforced) {
+    return {
+      isValid: false,
+      rejectionReason:
+        'Production security policy: Server-side facial landmark inference runtime (@tensorflow/tfjs-node) is not loaded. Client-supplied descriptors cannot authorize production attendance.',
+      distanceMeters,
+      faceDistance: 1.0,
+      biometricTier: {
+        mode: 'prototype_client_descriptor',
+        isProductionSecure: false,
+        failClosed: true,
+      },
+    };
+  }
+
   const enrollment = db.getEnrollmentByUserId(userId);
   if (!enrollment) {
     return {
@@ -103,15 +160,24 @@ function validateAttendanceSubmission(
       rejectionReason: 'Biometric profile not enrolled. Please complete facial enrollment before marking attendance.',
       distanceMeters,
       faceDistance: 1.0,
+      biometricTier: {
+        mode: 'prototype_client_descriptor',
+        isProductionSecure: false,
+      },
     };
   }
 
-  if (!Array.isArray(payload.faceDescriptor) || payload.faceDescriptor.length !== 128) {
+  const descriptorCheck = validateDescriptorIntegrity(payload.faceDescriptor);
+  if (!descriptorCheck.valid) {
     return {
       isValid: false,
-      rejectionReason: 'Missing or malformed face descriptor vector.',
+      rejectionReason: descriptorCheck.error || 'Invalid or fabricated face descriptor vector.',
       distanceMeters,
       faceDistance: 1.0,
+      biometricTier: {
+        mode: 'prototype_client_descriptor',
+        isProductionSecure: false,
+      },
     };
   }
 
@@ -128,6 +194,10 @@ function validateAttendanceSubmission(
       )}, required threshold: < ${FACE_MATCH_THRESHOLD}). Face did not match enrolled profile.`,
       distanceMeters,
       faceDistance,
+      biometricTier: {
+        mode: 'prototype_client_descriptor',
+        isProductionSecure: false,
+      },
     };
   }
 
@@ -135,6 +205,11 @@ function validateAttendanceSubmission(
     isValid: true,
     distanceMeters,
     faceDistance,
+    biometricTier: {
+      mode: 'prototype_client_descriptor',
+      isProductionSecure: false,
+      notice: 'Prototype mode: Descriptor computed on client browser. Not for production biometric verification.',
+    },
   };
 }
 
@@ -155,6 +230,7 @@ router.post('/verify', (req: Request, res: Response) => {
     faceMatched: validation.faceDistance <= FACE_MATCH_THRESHOLD,
     faceDistance: Number(validation.faceDistance.toFixed(4)),
     rejectionReason: validation.rejectionReason || null,
+    biometricTier: validation.biometricTier,
   });
 });
 
@@ -218,6 +294,7 @@ router.post('/submit', (req: Request, res: Response) => {
     success: status === 'confirmed',
     record,
     error: status === 'rejected' ? validation.rejectionReason : undefined,
+    biometricTier: validation.biometricTier,
   });
 });
 

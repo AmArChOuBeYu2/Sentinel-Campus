@@ -6,6 +6,10 @@ import {
   calculateEuclideanDistance,
   db,
 } from '../db';
+import {
+  validateDescriptorIntegrity,
+  validateAttendanceSubmission,
+} from '../routes/attendance';
 
 async function runTestSuite() {
   console.log('🧪 ========================================================');
@@ -598,6 +602,119 @@ async function runTestSuite() {
   // 13.12 Ephemeral thumbnail privacy: verified that disk db.json contains no base64 images
   const dbDiskRaw = fs.readFileSync(path.resolve(process.cwd(), 'server', 'data', 'db.json'), 'utf-8');
   assert(!dbDiskRaw.includes('data:image/jpeg;base64,'), 'Disk db.json contains zero persisted base64 camera images');
+
+  // 14. Biometric Trust Gap & Production Fail-Closed Regression Tests
+  console.log('\n--- 14. Biometric Trust Gap & Production Fail-Closed Security Policy Tests ---');
+
+  // 14.1 Descriptor integrity bounds checks
+  const malformedLengthVector = [0.1, 0.2, 0.3];
+  const lengthCheck = validateDescriptorIntegrity(malformedLengthVector);
+  assert(lengthCheck.valid === false, 'Non-128 dimensional descriptor rejected by integrity validator');
+
+  const nanVector = Array.from({ length: 128 }, (_, i) => (i === 10 ? NaN : 0.05));
+  const nanCheck = validateDescriptorIntegrity(nanVector);
+  assert(nanCheck.valid === false, 'Descriptor with NaN values rejected');
+
+  const outOfRangeVector = Array.from({ length: 128 }, (_, i) => (i === 5 ? 3.5 : 0.05));
+  const outOfRangeCheck = validateDescriptorIntegrity(outOfRangeVector);
+  assert(outOfRangeCheck.valid === false, 'Descriptor exceeding [-2.0, 2.0] bounds rejected');
+
+  const uniformFlatVector = Array.from({ length: 128 }, () => 0.08);
+  const flatCheck = validateDescriptorIntegrity(uniformFlatVector);
+  assert(flatCheck.valid === false, 'Fabricated uniform flat vector rejected');
+
+  const tinyMagnitudeVector = Array.from({ length: 128 }, () => 0.01);
+  const tinyCheck = validateDescriptorIntegrity(tinyMagnitudeVector);
+  assert(tinyCheck.valid === false, 'Vector with implausibly small magnitude (< 0.3) rejected');
+
+  const legitimateVector = Array.from({ length: 128 }, (_, i) => Math.sin(i * 0.15) * 0.1);
+  const legitCheck = validateDescriptorIntegrity(legitimateVector);
+  assert(legitCheck.valid === true, 'Plausible, varied 128-d face descriptor passes integrity check');
+
+  // 14.2 Missing biometric enrollment rejection
+  const unenrolledUserId = 'usr_stu_0001';
+  db.resetEnrollment(unenrolledUserId);
+  const unenrolledSubmission = validateAttendanceSubmission(unenrolledUserId, {
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    latitude: 26.8227,
+    longitude: 75.8647,
+    locationAccuracy: 10,
+    faceDescriptor: legitimateVector,
+    capturedAt: new Date().toISOString(),
+  });
+  assert(unenrolledSubmission.isValid === false, 'Unenrolled student rejected from attendance submission');
+  assert(
+    Boolean(unenrolledSubmission.rejectionReason?.includes('not enrolled')),
+    'Unenrolled rejection provides clear enrollment notice'
+  );
+
+  // 14.3 Production fail-closed policy enforcement
+  // Enroll user temporarily for testing
+  db.saveEnrollment(unenrolledUserId, legitimateVector, 'Test consent');
+
+  // Enable production biometric enforcement
+  process.env.REQUIRE_SERVER_BIOMETRICS = 'true';
+  const prodBlockedSubmission = validateAttendanceSubmission(unenrolledUserId, {
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    latitude: 26.8227,
+    longitude: 75.8647,
+    locationAccuracy: 10,
+    faceDescriptor: legitimateVector,
+    capturedAt: new Date().toISOString(),
+  });
+  assert(prodBlockedSubmission.isValid === false, 'Production mode strictly blocks client-generated descriptors');
+  assert(
+    Boolean(prodBlockedSubmission.rejectionReason?.includes('Production security policy')),
+    'Production rejection specifies fail-closed policy explanation'
+  );
+  assert(
+    prodBlockedSubmission.biometricTier?.failClosed === true,
+    'Biometric tier metadata confirms failClosed: true'
+  );
+
+  // Restore non-production / prototype mode
+  delete process.env.REQUIRE_SERVER_BIOMETRICS;
+  const devAllowedSubmission = validateAttendanceSubmission(unenrolledUserId, {
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    latitude: 26.8227,
+    longitude: 75.8647,
+    locationAccuracy: 10,
+    faceDescriptor: legitimateVector,
+    capturedAt: new Date().toISOString(),
+  });
+  assert(devAllowedSubmission.isValid === true, 'Prototype mode permits verified descriptor for enrolled user');
+  assert(
+    devAllowedSubmission.biometricTier?.mode === 'prototype_client_descriptor',
+    'Biometric tier explicitly tagged as prototype_client_descriptor'
+  );
+
+  // 14.4 Impostor face mismatch rejection
+  const impostorVector = Array.from({ length: 128 }, (_, i) => Math.cos(i * 0.7) * 0.2);
+  const mismatchSubmission = validateAttendanceSubmission(unenrolledUserId, {
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    latitude: 26.8227,
+    longitude: 75.8647,
+    locationAccuracy: 10,
+    faceDescriptor: impostorVector,
+    capturedAt: new Date().toISOString(),
+  });
+  assert(mismatchSubmission.isValid === false, 'Impostor face vector rejected due to Euclidean distance threshold');
+  assert(mismatchSubmission.faceDistance >= 0.55, 'Impostor face distance exceeds 0.55 threshold');
+
+  // 14.5 Photo privacy audit verification
+  const refImagesDir = path.resolve(process.cwd(), 'public', 'reference-images');
+  assert(fs.existsSync(refImagesDir) === false, 'public/reference-images folder does not exist on disk');
+
+  const gitignorePath = path.resolve(process.cwd(), '.gitignore');
+  const gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8');
+  assert(gitignoreContent.includes('public/reference-images/'), '.gitignore protects public/reference-images/');
+  assert(gitignoreContent.includes('private-enrollment-storage/'), '.gitignore protects private enrollment storage');
+  assert(gitignoreContent.includes('storage/'), '.gitignore protects general storage');
+  assert(gitignoreContent.includes('uploads/'), '.gitignore protects file uploads');
 
   // Final cleanup so usr_stu_0001 returns to unenrolled baseline state
   db.resetEnrollment('usr_stu_0001');

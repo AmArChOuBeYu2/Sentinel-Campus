@@ -313,6 +313,28 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
 
   const { faceDescriptor, thumbnailUrl } = req.body;
 
+  // Production Fail-Closed Policy:
+  // Server-side face recognition runtime (e.g. @tensorflow/tfjs-node) is absent from this Node.js environment.
+  // When in production mode or when REQUIRE_SERVER_BIOMETRICS is enabled, client-generated descriptors must fail closed safely.
+  const isProductionBiometricEnforced =
+    process.env.NODE_ENV === 'production' || process.env.REQUIRE_SERVER_BIOMETRICS === 'true';
+
+  if (isProductionBiometricEnforced) {
+    db.addAuditLog(user.id, 'BIOMETRIC_FAIL_CLOSED_PRODUCTION', 'WARNING', {
+      token,
+      message: 'Client-supplied descriptor rejected under production biometric security policy',
+    });
+    return res.status(503).json({
+      success: false,
+      error: 'Production security policy: Server-side facial landmark inference runtime (@tensorflow/tfjs-node) is not loaded. Client-supplied descriptors cannot authorize production attendance.',
+      biometricTier: {
+        mode: 'prototype_client_descriptor',
+        isProductionSecure: false,
+        failClosed: true,
+      },
+    });
+  }
+
   // Zero-Trust Check 1: Validate descriptor vector format, norm and integrity
   const descriptorCheck = validateDescriptorIntegrity(faceDescriptor);
   if (!descriptorCheck.valid) {
@@ -371,11 +393,18 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
 
       db.addStudentCaptureToSession(token, captureRecord);
 
+      const biometricTier = {
+        mode: 'prototype_client_descriptor' as const,
+        isProductionSecure: false,
+        notice: 'Prototype mode: Descriptor computed on client browser. Server performs Euclidean distance matching against enrolled reference.',
+      };
+
       return res.status(409).json({
         success: false,
         error: `Duplicate attendance: ${matchedStudent.fullName} (${matchedStudent.identifierCode}) has already been marked present for ${session.checkpointType}.`,
         capture: captureRecord,
         matchedStudent,
+        biometricTier,
       });
     }
 
@@ -411,6 +440,12 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
 
     db.addStudentCaptureToSession(token, captureRecord);
 
+    const biometricTier = {
+      mode: 'prototype_client_descriptor' as const,
+      isProductionSecure: false,
+      notice: 'Prototype mode: Descriptor computed on client browser. Server performs Euclidean distance matching against enrolled reference.',
+    };
+
     return res.json({
       success: true,
       status: 'confirmed',
@@ -418,6 +453,7 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
       capture: captureRecord,
       matchedStudent,
       confidence: matchResult.confidence,
+      biometricTier,
     });
   }
 
@@ -441,6 +477,12 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
 
   db.addStudentCaptureToSession(token, captureRecord);
 
+  const biometricTier = {
+    mode: 'prototype_client_descriptor' as const,
+    isProductionSecure: false,
+    notice: 'Prototype mode: Descriptor computed on client browser. Server performs Euclidean distance matching against enrolled reference.',
+  };
+
   return res.json({
     success: false,
     status,
@@ -450,6 +492,7 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
         : 'Face does not match any enrolled student reference profile (Confidence below 55%).',
     capture: captureRecord,
     confidence: matchResult.confidence,
+    biometricTier,
   });
 });
 
