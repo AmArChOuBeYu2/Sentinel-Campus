@@ -65,10 +65,11 @@ class ApiService {
   }): Promise<{
     success: boolean;
     message: string;
-    userId: string;
-    identifierCode: string;
-    phoneMasked: string;
-    simulatedOtp: string;
+    userId?: string;
+    credential?: string;
+    emailMasked?: string;
+    isSimulated?: boolean;
+    simulatedOtp?: string;
   }> {
     return this.request('/auth/login', {
       method: 'POST',
@@ -76,10 +77,19 @@ class ApiService {
     });
   }
 
-  async verifyOtp(userId: string, otp: string): Promise<{ success: boolean; user: UserProfile; token: string }> {
+  async verifyOtp(
+    paramOrUserId: string | { userId?: string; credential?: string; role?: UserRole; otp: string },
+    optionalOtp?: string,
+    optionalRole?: UserRole
+  ): Promise<{ success: boolean; user: UserProfile; token: string }> {
+    const payload =
+      typeof paramOrUserId === 'string'
+        ? { userId: paramOrUserId, otp: optionalOtp, role: optionalRole }
+        : paramOrUserId;
+
     const res = await this.request<{ success: boolean; user: UserProfile; token: string }>('/auth/verify-otp', {
       method: 'POST',
-      body: JSON.stringify({ userId, otp }),
+      body: JSON.stringify(payload),
     });
     if (res.token) {
       this.setToken(res.token);

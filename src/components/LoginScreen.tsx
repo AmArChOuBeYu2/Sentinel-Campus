@@ -49,10 +49,18 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     setStage('auth');
   };
 
+  const [emailMasked, setEmailMasked] = useState<string | null>(null);
+
   const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!credential.trim()) {
-      setErrorMsg('Please enter your registered phone number or institutional email.');
+    const cleanCred = credential.trim();
+    if (!cleanCred) {
+      setErrorMsg('Please enter your registered institutional email address.');
+      return;
+    }
+
+    if (!cleanCred.includes('@')) {
+      setErrorMsg('SMS authentication is not configured. Please enter your registered institutional email address to receive an email OTP.');
       return;
     }
 
@@ -61,15 +69,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     try {
       const res = await api.requestLogin({
         role: selectedRole,
-        credential: credential.trim(),
+        credential: cleanCred,
       });
 
       if (res.success) {
         setSimulatedOtp(res.simulatedOtp || null);
-        setPhoneMasked(res.phoneMasked);
-        setActiveUserId(res.userId);
+        setEmailMasked(res.emailMasked || cleanCred);
+        if (res.userId) setActiveUserId(res.userId);
         setOtp(res.simulatedOtp || '');
         setOtpSent(true);
+      } else {
+        setErrorMsg(res.message || 'Authentication request failed.');
       }
     } catch (err: unknown) {
       const e = err as Error;
@@ -89,7 +99,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await api.verifyOtp(activeUserId, otp);
+      const res = await api.verifyOtp({
+        userId: activeUserId || undefined,
+        credential: credential.trim(),
+        role: selectedRole,
+        otp: otp.trim(),
+      });
       if (res.success && res.user) {
         if (res.user.role !== selectedRole && res.user.role !== 'admin') {
           setErrorMsg(`Role mismatch: Account is registered as ${res.user.role}, not ${selectedRole}.`);
@@ -234,34 +249,33 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
               </div>
 
               {!otpSent ? (
-                /* Step 2A: Phone or Email input + Send OTP */
+                /* Step 2A: Email input + Send OTP */
                 <form onSubmit={handleSendOtp} className="space-y-4">
                   <div className="space-y-1">
-                    <h3 className="text-sm font-bold text-slate-900">Institutional Identity</h3>
+                    <h3 className="text-sm font-bold text-slate-900">Institutional Email Authentication</h3>
                     <p className="text-xs text-slate-500">
-                      Enter your registered mobile phone number or SKIT email address.
+                      Enter your registered SKIT institutional email to receive a secure passcode via Resend.
                     </p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Phone Number or Email Address
+                      Institutional Email Address
                     </label>
                     <div className="relative">
-                      {credential.includes('@') ? (
-                        <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                      ) : (
-                        <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                      )}
+                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                       <input
-                        type="text"
+                        type="email"
                         required
                         value={credential}
                         onChange={(e) => setCredential(e.target.value)}
-                        placeholder="e.g. +91 98765 43210 or user@skit.ac.in"
+                        placeholder="e.g. user@skit.ac.in"
                         className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:border-[#800020] focus:ring-2 focus:ring-[#800020]/20"
                       />
                     </div>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      * SMS phone OTP is not configured. Email verification is enforced.
+                    </p>
                   </div>
 
                   {errorMsg && (
@@ -279,11 +293,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                     {loading ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Sending One-Time Passcode...</span>
+                        <span>Dispatching Passcode via Resend...</span>
                       </>
                     ) : (
                       <>
-                        <span>Send OTP</span>
+                        <span>Send Email OTP</span>
                         <ArrowRight className="w-4 h-4" />
                       </>
                     )}
@@ -294,12 +308,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
                 <form onSubmit={handleVerifyOtp} className="space-y-4">
                   <div className="text-center space-y-1">
                     <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center mx-auto">
-                      <Lock className="w-5 h-5" />
+                      <Mail className="w-5 h-5" />
                     </div>
                     <h3 className="text-sm font-bold text-slate-900">Enter Verification Code</h3>
                     <p className="text-xs text-slate-500">
-                      Passcode sent to <strong className="text-slate-800">{phoneMasked}</strong>
+                      Passcode sent via Resend to <strong className="text-slate-800">{emailMasked || credential}</strong>
                     </p>
+                    <p className="text-[10px] text-slate-400">Valid for 5 minutes &bull; Single-use only</p>
                   </div>
 
                   {simulatedOtp && (

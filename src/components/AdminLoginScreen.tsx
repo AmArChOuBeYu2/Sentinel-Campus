@@ -40,10 +40,10 @@ export const AdminLoginScreen: React.FC<AdminLoginScreenProps> = ({ onAdminLogin
       });
 
       if (res.success) {
-        setSimulatedOtp(res.simulatedOtp);
-        setPhoneMasked(res.phoneMasked);
-        setActiveUserId(res.userId);
-        setOtp(res.simulatedOtp);
+        setSimulatedOtp(res.simulatedOtp || null);
+        setPhoneMasked(res.emailMasked || credential);
+        setActiveUserId(res.userId || '');
+        setOtp(res.simulatedOtp || '');
         setStep('otp');
       }
     } catch (err: unknown) {

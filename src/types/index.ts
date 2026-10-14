@@ -12,6 +12,7 @@ export interface UserProfile {
   isEnrolled: boolean;
   createdAt: string;
   avatarUrl?: string;
+  secondaryEmail?: string;
   semester?: string;
   section?: string;
 }

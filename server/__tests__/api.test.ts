@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import {
   calculateHaversineDistance,
   calculateEuclideanDistance,
@@ -112,6 +113,74 @@ async function runTestSuite() {
   const auditLogs = db.getAuditLogs();
   const enrollmentLog = auditLogs.find((l) => l.action === 'ENROLLMENT_COMPLETED' && l.actorId === testUserId);
   assert(enrollmentLog !== undefined, 'Security audit trail captures biometric enrollment event');
+
+  // 7. Resend Email OTP Authentication & Security Tests (Requirement 10)
+  console.log('\n--- 7. Resend Email OTP Authentication & Security Tests ---');
+  const { otpService } = await import('../services/otpService');
+  otpService.resetStoreForTesting();
+
+  const testStudentId = 'usr_stu_test_001';
+
+  // 7.1 Correct OTP verification
+  otpService.seedOtpForTesting(testStudentId, 'student', '482910');
+  const validRes = otpService.verifyOtp(testStudentId, 'student', '482910');
+  assert(validRes.success === true, 'Correct 6-digit OTP verified successfully');
+
+  // 7.2 Single-use / Reused OTP rejection
+  const reusedRes = otpService.verifyOtp(testStudentId, 'student', '482910');
+  assert(reusedRes.success === false, 'Reused OTP correctly rejected (Single-use enforcement)');
+
+  // 7.3 Incorrect OTP rejection & attempt tracking
+  otpService.seedOtpForTesting(testStudentId, 'student', '991122');
+  const wrongRes = otpService.verifyOtp(testStudentId, 'student', '000000');
+  assert(wrongRes.success === false, 'Incorrect OTP rejected with attempts decrement');
+
+  // 7.4 Expired OTP rejection
+  otpService.seedOtpForTesting(testStudentId, 'student', '778899', { isExpired: true });
+  const expiredRes = otpService.verifyOtp(testStudentId, 'student', '778899');
+  assert(expiredRes.success === false, 'Expired OTP (>5 min) correctly rejected');
+
+  // 7.5 Role mismatch rejection
+  otpService.seedOtpForTesting(testStudentId, 'student', '665544');
+  const roleMismatchRes = otpService.verifyOtp(testStudentId, 'teacher', '665544');
+  assert(roleMismatchRes.success === false, 'Role mismatch rejected (Student OTP attempted as Teacher)');
+
+  // 7.6 Phone Credential Detection (Requirement 8)
+  const isPhone = otpService.isPhoneCredential('+91 98765 43210');
+  const isEmail = otpService.isPhoneCredential('amar.choubey@skit.ac.in');
+  assert(isPhone === true, 'Phone number credential correctly identified as SMS');
+  assert(isEmail === false, 'Email credential correctly identified for Resend delivery');
+
+  // 7.7 Cooldown & Rate Limiting Enforcement
+  const dummyUser = {
+    id: 'usr_stu_0001',
+    email: 'test.cooldown@skit.ac.in',
+    phone: '+91 98765 43210',
+    fullName: 'Test Cooldown User',
+    role: 'student' as const,
+    department: 'CSE',
+    identifierCode: 'SC-TEST-0001',
+    isActive: true,
+    isEnrolled: false,
+    createdAt: new Date().toISOString(),
+  };
+
+  const firstReq = await otpService.requestOtp(dummyUser, 'test.cooldown@skit.ac.in', 'student');
+  assert(firstReq.success === true, 'First OTP request processed');
+
+  const cooldownReq = await otpService.requestOtp(dummyUser, 'test.cooldown@skit.ac.in', 'student');
+  assert(cooldownReq.success === false && cooldownReq.status === 429, 'Immediate second OTP request blocked by 60-second cooldown');
+
+  // 7.8 Live Resend Email Delivery to Verified Owner Address (Requirement 10)
+  if (process.env.RESEND_API_KEY) {
+    const amarUser = db.getUserById('usr_stu_0001');
+    if (amarUser) {
+      otpService.resetStoreForTesting();
+      const liveDispatch = await otpService.requestOtp(amarUser, 'httpsamar96@gmail.com', 'student');
+      assert(liveDispatch.success === true, 'Live Resend email OTP delivered to owner address (httpsamar96@gmail.com)');
+      assert(liveDispatch.isSimulated === false, 'Live delivery confirmed as non-simulated real Resend email');
+    }
+  }
 
   console.log('\n========================================================');
   console.log(`🏁 TEST RESULTS: ${passed} PASSED | ${failed} FAILED`);

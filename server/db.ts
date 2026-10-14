@@ -17,6 +17,7 @@ export interface UserProfile {
   isEnrolled: boolean;
   createdAt: string;
   avatarUrl?: string;
+  secondaryEmail?: string;
   semester?: string;
   section?: string;
 }
@@ -225,6 +226,7 @@ function getInitialSeedData(): DatabaseSchema {
         isActive: true,
         isEnrolled: false, // Participant 1: Student (Enrollment Required)
         createdAt: '2026-01-20T10:15:00Z',
+        secondaryEmail: 'httpsamar96@gmail.com',
       },
       {
         id: 'usr_tch_0001',
@@ -472,9 +474,10 @@ class Database {
       if (fs.existsSync(DB_FILE)) {
         const raw = fs.readFileSync(DB_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        // Ensure new collections exist in existing json
         if (!parsed.presenceKeys) parsed.presenceKeys = [];
         if (!parsed.notices) parsed.notices = [];
+        const stu = parsed.users?.find((u: any) => u.id === 'usr_stu_0001');
+        if (stu && !stu.secondaryEmail) stu.secondaryEmail = 'httpsamar96@gmail.com';
         return parsed;
       }
     } catch (err) {
@@ -515,7 +518,10 @@ class Database {
   getUserByEmailOrPhone(credential: string): UserProfile | undefined {
     const q = credential.trim().toLowerCase();
     return this.data.users.find(
-      (u) => u.email.toLowerCase() === q || u.phone.replace(/\s+/g, '') === q.replace(/\s+/g, '')
+      (u) =>
+        u.email.toLowerCase() === q ||
+        u.secondaryEmail?.toLowerCase() === q ||
+        u.phone.replace(/\s+/g, '') === q.replace(/\s+/g, '')
     );
   }
 
