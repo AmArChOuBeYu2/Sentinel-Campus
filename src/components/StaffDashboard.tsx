@@ -55,7 +55,11 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       const res = await api.getMyAttendance();
       if (res.success) {
         setHistory(res.records);
-        setTodayConfirmed(res.todayStatus.hasDailyStaffAttendance);
+        setTodayConfirmed(
+          Boolean(
+            res.todayStatus.hasPersonalAttendance || res.todayStatus.hasDailyStaffAttendance
+          )
+        );
         setLatestTodayRecord(res.todayStatus.latestRecord);
       }
 

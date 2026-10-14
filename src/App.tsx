@@ -60,7 +60,7 @@ function AppContent() {
 
   // Modals state
   const [attendanceParams, setAttendanceParams] = useState<{
-    sessionType?: 'daily_staff' | 'class_session';
+    sessionType?: 'daily_personal' | 'daily_staff' | 'class_session';
     sessionId?: string;
     checkpointType?: 'entry' | 'checkpoint_1' | 'checkpoint_2';
     title?: string;

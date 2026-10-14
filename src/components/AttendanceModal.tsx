@@ -31,7 +31,7 @@ export type FaceVerificationState =
 interface AttendanceModalProps {
   user: UserProfile;
   campus: CampusConfig;
-  sessionType?: 'daily_staff' | 'class_session';
+  sessionType?: 'daily_personal' | 'daily_staff' | 'class_session';
   sessionId?: string;
   checkpointType?: 'entry' | 'checkpoint_1' | 'checkpoint_2';
   title?: string;
@@ -45,7 +45,7 @@ type Step = 'camera_check' | 'processing' | 'result';
 export const AttendanceModal: React.FC<AttendanceModalProps> = ({
   user,
   campus,
-  sessionType = 'daily_staff',
+  sessionType = user.role === 'teacher' ? 'daily_personal' : user.role === 'staff' ? 'daily_staff' : 'class_session',
   sessionId,
   checkpointType = 'entry',
   title = 'Mark Campus Attendance',

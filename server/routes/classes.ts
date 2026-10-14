@@ -369,6 +369,32 @@ router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
   if (matchResult.status === 'confirmed' && matchResult.match) {
     const matchedStudent = matchResult.match;
 
+    // Zero-Trust Check 4: Strict Student Role & Teacher Identity Isolation
+    // The instructor capturing attendance cannot be recognized as a student, nor can any non-student
+    if (matchedStudent.role !== 'student' || matchedStudent.id === user.id) {
+      db.addAuditLog(user.id, 'CLASS_CAPTURE_NON_STUDENT_REJECTED', 'WARNING', {
+        token,
+        detectedId: matchedStudent.id,
+        detectedRole: matchedStudent.role,
+        teacherId: user.id,
+      });
+      return res.status(422).json({
+        success: false,
+        error: `Identification rejected: The detected face belongs to an instructor/staff member (${matchedStudent.fullName}), not an eligible student.`,
+        capture: {
+          studentId: null,
+          studentName: 'Non-Student Face Detected',
+          identifierCode: 'N/A',
+          capturedAt: new Date().toISOString(),
+          faceDistance: matchResult.distance,
+          status: 'unmatched',
+          thumbnailUrl,
+          processingTimeMs,
+          checkpointType: session.checkpointType,
+        },
+      });
+    }
+
     // Check duplicate attendance constraint for this student, class session, and checkpoint
     const duplicate = db.findDuplicateAttendance(
       matchedStudent.id,

@@ -39,8 +39,9 @@ async function runTestSuite() {
   }
 
   // Ensure clean unenrolled baseline state for seed team accounts
-  db.resetEnrollment('usr_stu_0001');
-  db.resetEnrollment('usr_tch_0001');
+  for (const demoId of ['usr_stu_0001', 'usr_tch_0001', 'usr_sta_0001', 'usr_sta_0002', 'usr_sta_0003']) {
+    db.resetEnrollment(demoId);
+  }
 
   // 1. Haversine Distance Test
   console.log('\n--- 1. Geofence & Haversine Distance Tests ---');
@@ -950,8 +951,165 @@ async function runTestSuite() {
   process.env.NODE_ENV = prevEnv;
   process.env.SUPABASE_URL = prevUrl;
 
-  // Final cleanup so usr_stu_0001 returns to unenrolled baseline state
+  // 18. Cross-Identity Biometric Binding & Role Authorization Tests
+  console.log('\n--- 18. Cross-Identity Biometric Binding & Role Authorization Tests ---');
+
+  const amarDescriptor = Array.from({ length: 128 }, (_, i) => Number((Math.sin((i + 1) * 0.2) * 0.08).toFixed(4)));
+  const sudhanshuDescriptor = Array.from({ length: 128 }, (_, i) => Number((Math.cos((i + 1) * 0.3) * 0.08).toFixed(4)));
+
+  // Setup: Enroll Amar (Teacher) and Sudhanshu (Staff) with distinct valid descriptors
+  db.saveEnrollment('usr_tch_0001', amarDescriptor, 'Teacher biometric consent');
+  db.saveEnrollment('usr_sta_0001', sudhanshuDescriptor, 'Staff biometric consent');
+
+  // 18.1 Test 1: Sudhanshu Staff account rejects live descriptor matching Amar's Teacher reference with CROSS_IDENTITY_MISMATCH
+  const liveAmarOnSudhanshu = amarDescriptor.map((v) => v + 0.002);
+  const crossResult1 = validateAttendanceSubmission('usr_sta_0001', {
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    latitude: skitLat,
+    longitude: skitLon,
+    locationAccuracy: 10,
+    faceDescriptor: liveAmarOnSudhanshu,
+    capturedAt: new Date().toISOString(),
+  });
+  assert(crossResult1.isValid === false, 'Sudhanshu Staff account rejects live capture matching Amar with cross-identity mismatch');
+  assert(
+    Boolean(crossResult1.rejectionReason?.includes('Cross-identity mismatch rejected') && crossResult1.rejectionReason?.includes('Amar Choubey')),
+    'Rejection explicitly names the mismatched identity (Amar Choubey)'
+  );
+  assert(
+    Boolean((crossResult1.biometricTier as any)?.crossIdentityMismatch === true),
+    'Biometric tier flags crossIdentityMismatch: true'
+  );
+
+  // 18.2 Test 2: Amar Teacher account rejects live descriptor matching Sudhanshu's Staff reference
+  const liveSudhanshuOnAmar = sudhanshuDescriptor.map((v) => v + 0.002);
+  const crossResult2 = validateAttendanceSubmission('usr_tch_0001', {
+    sessionType: 'daily_personal',
+    checkpointType: 'entry',
+    latitude: skitLat,
+    longitude: skitLon,
+    locationAccuracy: 10,
+    faceDescriptor: liveSudhanshuOnAmar,
+    capturedAt: new Date().toISOString(),
+  });
+  assert(crossResult2.isValid === false, 'Amar Teacher account rejects live capture matching Sudhanshu with cross-identity mismatch');
+  assert(
+    Boolean(crossResult2.rejectionReason?.includes('Cross-identity mismatch rejected') && crossResult2.rejectionReason?.includes('Sudhanshu Kumar')),
+    'Rejection explicitly names the mismatched identity (Sudhanshu Kumar)'
+  );
+  assert(
+    Boolean((crossResult2.biometricTier as any)?.crossIdentityMismatch === true),
+    'Biometric tier flags crossIdentityMismatch: true'
+  );
+
+  // 18.3 Test 3: Correct identity passes when enrollment matches authenticated user
+  const liveAmarOnAmar = amarDescriptor.map((v) => v + 0.002);
+  const correctMatchResult = validateAttendanceSubmission('usr_tch_0001', {
+    sessionType: 'daily_personal',
+    checkpointType: 'entry',
+    latitude: skitLat,
+    longitude: skitLon,
+    locationAccuracy: 10,
+    faceDescriptor: liveAmarOnAmar,
+    capturedAt: new Date().toISOString(),
+  });
+  assert(correctMatchResult.isValid === true, 'Amar Teacher account verifies successfully with genuine matching capture');
+  assert(correctMatchResult.faceDistance < 0.55, 'Face distance is well within 0.55 match threshold');
+
+  // 18.4 Test 4: Client cannot tamper with userId or userRole in attendance recording (authoritative override)
+  const tamperedRecord = db.recordAttendance({
+    idempotencyKey: `idemp_tamper_${Date.now()}`,
+    userId: 'usr_tch_0001',
+    userName: 'Attacker Impersonator',
+    userRole: 'student',
+    sessionType: 'daily_personal',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+  });
+  assert(tamperedRecord.userName === 'Amar Choubey', 'Server enforces authoritative userName from profile against client tampering');
+  assert(tamperedRecord.userRole === 'teacher', 'Server enforces authoritative userRole from profile against client tampering');
+
+  // 18.5 Test 5: Teacher account attempting daily_staff is normalized to daily_personal
+  const teacherStaffRecord = db.recordAttendance({
+    idempotencyKey: `idemp_tch_staff_${Date.now()}`,
+    userId: 'usr_tch_0001',
+    userName: 'Amar Choubey',
+    userRole: 'teacher',
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+  });
+  assert(teacherStaffRecord.sessionType === 'daily_personal', 'Teacher account sessionType normalized from daily_staff to daily_personal');
+
+  // 18.6 Test 6: Unapproved manual review keeps status pending and does not unlock gate or attendance
+  const pendingReview = db.createManualReview('usr_sta_0003', 'Lighting issue during camera scan');
+  assert(pendingReview.status === 'pending', 'Manual review created with initial status pending');
+  const staff3Profile = db.getUserById('usr_sta_0003');
+  assert(staff3Profile?.isEnrolled === false, 'Pending manual review does not alter enrollment status');
+  const hasAttendance = db.hasConfirmedPersonalAttendanceToday('usr_sta_0003', '2026-10-15');
+  assert(hasAttendance === false, 'Pending manual review does not unlock personal attendance gate');
+
+  // 18.7 Test 7: Classroom QR scan matches only student role and rejects teacher/staff faces
+  const teacherInClassMatch = db.matchStudentFace(amarDescriptor);
+  assert(teacherInClassMatch.status === 'unmatched', 'Classroom student facial scan rejects Teacher face');
+  assert(teacherInClassMatch.match === null, 'No student matched when Teacher face presented');
+
+  const staffInClassMatch = db.matchStudentFace(sudhanshuDescriptor);
+  assert(staffInClassMatch.status === 'unmatched', 'Classroom student facial scan rejects Staff face');
+  assert(staffInClassMatch.match === null, 'No student matched when Staff face presented');
+
+  // 18.8 Test 8: Duplicate personal attendance writes return existing record idempotently
+  const idempKey = `idemp_unique_test_${Date.now()}`;
+  const firstWrite = db.recordAttendance({
+    idempotencyKey: idempKey,
+    userId: 'usr_sta_0001',
+    userName: 'Sudhanshu Kumar',
+    userRole: 'staff',
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+  });
+  const secondWrite = db.recordAttendance({
+    idempotencyKey: idempKey,
+    userId: 'usr_sta_0001',
+    userName: 'Sudhanshu Kumar',
+    userRole: 'staff',
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+  });
+  assert(firstWrite.id === secondWrite.id, 'Duplicate attendance submission with same idempotencyKey returns identical record');
+
+  // 18.9 Test 9: Unenrolled or missing reference fails closed
   db.resetEnrollment('usr_stu_0001');
+  const unenrolledRes = validateAttendanceSubmission('usr_stu_0001', {
+    sessionType: 'class_session',
+    checkpointType: 'entry',
+    latitude: skitLat,
+    longitude: skitLon,
+    locationAccuracy: 10,
+    faceDescriptor: amarDescriptor,
+    capturedAt: new Date().toISOString(),
+  });
+  assert(unenrolledRes.isValid === false, 'Unenrolled student fails closed on biometric verification');
+  assert(
+    Boolean(unenrolledRes.rejectionReason?.includes('Biometric profile not enrolled')),
+    'Rejection explains missing enrollment'
+  );
+
+  // Final cleanup so all demo accounts return to unenrolled baseline state
+  for (const demoId of ['usr_stu_0001', 'usr_tch_0001', 'usr_sta_0001', 'usr_sta_0002', 'usr_sta_0003']) {
+    db.resetEnrollment(demoId);
+  }
   assert(db.getUserById('usr_stu_0001')?.isEnrolled === false, 'Final cleanup: baseline user returns to unenrolled');
 
   if (failed > 0) {

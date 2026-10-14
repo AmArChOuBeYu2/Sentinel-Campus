@@ -181,6 +181,30 @@ export function validateAttendanceSubmission(
     };
   }
 
+  // Cross-Identity Check: Reject if face belongs to another registered account
+  const allOtherEnrollments = db.getEnrollments().filter((e) => e.userId !== userId && e.isActive);
+  for (const otherEnrollment of allOtherEnrollments) {
+    if (otherEnrollment.descriptor && Array.isArray(otherEnrollment.descriptor)) {
+      const crossDist = calculateEuclideanDistance(otherEnrollment.descriptor, payload.faceDescriptor);
+      if (crossDist <= FACE_MATCH_THRESHOLD) {
+        const otherUser = db.getUserById(otherEnrollment.userId);
+        const otherName = otherUser ? otherUser.fullName : otherEnrollment.userId;
+        const otherRole = otherUser ? otherUser.role.toUpperCase() : 'USER';
+        return {
+          isValid: false,
+          rejectionReason: `Cross-identity mismatch rejected: The detected face matches ${otherName} (${otherRole}), not the enrolled profile for the authenticated account.`,
+          distanceMeters,
+          faceDistance: crossDist,
+          biometricTier: {
+            mode: 'prototype_client_descriptor',
+            isProductionSecure: false,
+            crossIdentityMismatch: true,
+          },
+        };
+      }
+    }
+  }
+
   const faceDistance = calculateEuclideanDistance(
     enrollment.descriptor,
     payload.faceDescriptor
@@ -244,7 +268,44 @@ router.post('/submit', (req: Request, res: Response) => {
   const payload: SubmissionPayload = req.body;
   const eventDate = getCampusLocalDate();
   const checkpointType = payload.checkpointType || 'entry';
-  const sessionType = payload.sessionType || (user.role === 'staff' ? 'daily_staff' : 'class_session');
+
+  // Role Authorization Check: Restrict sessionType by authoritative user role
+  if (user.role === 'teacher') {
+    if (payload.sessionType === 'daily_staff') {
+      return res.status(403).json({
+        success: false,
+        error: 'Role authorization error: Teacher accounts cannot submit daily_staff attendance. Teacher accounts use daily_personal attendance.',
+      });
+    }
+    if (payload.sessionType === 'class_session') {
+      return res.status(403).json({
+        success: false,
+        error: 'Role authorization error: Teacher accounts cannot submit student class_session attendance. Use classroom QR session scanner to capture student attendance.',
+      });
+    }
+  }
+
+  if (user.role === 'staff') {
+    if (payload.sessionType === 'class_session') {
+      return res.status(403).json({
+        success: false,
+        error: 'Role authorization error: Staff accounts cannot submit student class_session attendance.',
+      });
+    }
+  }
+
+  if (user.role === 'student') {
+    if (payload.sessionType === 'daily_staff') {
+      return res.status(403).json({
+        success: false,
+        error: 'Role authorization error: Student accounts cannot submit staff attendance.',
+      });
+    }
+  }
+
+  const sessionType =
+    payload.sessionType ||
+    (user.role === 'staff' ? 'daily_staff' : user.role === 'teacher' ? 'daily_personal' : 'class_session');
 
   // Check duplicate attendance constraint
   const existingRecord = db.findDuplicateAttendance(
@@ -318,6 +379,11 @@ router.get('/me', (req: Request, res: Response) => {
       identifierCode: user.identifierCode,
     },
     todayStatus: {
+      hasPersonalAttendance: todayRecords.some(
+        (r) =>
+          (r.sessionType === 'daily_personal' || r.sessionType === 'daily_staff') &&
+          r.status === 'confirmed'
+      ),
       hasDailyStaffAttendance: todayRecords.some(
         (r) => r.sessionType === 'daily_staff' && r.status === 'confirmed'
       ),
@@ -540,7 +606,38 @@ router.post('/verify-personal-attendance', (req: Request, res: Response) => {
     });
   }
 
-  // 4. Biometric Face Distance Matching
+  // 4A. Cross-Identity Impostor Check: Inspect if presented face matches another registered user's enrolled profile
+  const allOtherEnrollments = db.getEnrollments().filter((e) => e.userId !== user.id && e.isActive);
+  for (const otherEnrollment of allOtherEnrollments) {
+    if (otherEnrollment.descriptor && Array.isArray(otherEnrollment.descriptor)) {
+      const crossDistance = calculateEuclideanDistance(otherEnrollment.descriptor, faceDescriptor);
+      if (crossDistance <= FACE_MATCH_THRESHOLD) {
+        const otherUser = db.getUserById(otherEnrollment.userId);
+        const otherName = otherUser ? otherUser.fullName : otherEnrollment.userId;
+        const otherRole = otherUser ? otherUser.role.toUpperCase() : 'USER';
+
+        db.addAuditLog(user.id, 'CROSS_IDENTITY_IMPOSTOR_ATTEMPT', 'FAILURE', {
+          authenticatedUserId: user.id,
+          authenticatedName: user.fullName,
+          authenticatedRole: user.role,
+          matchedUserId: otherEnrollment.userId,
+          matchedName: otherName,
+          matchedRole: otherRole,
+          crossDistance: Number(crossDistance.toFixed(4)),
+          threshold: FACE_MATCH_THRESHOLD,
+        });
+
+        return res.status(403).json({
+          success: false,
+          code: 'CROSS_IDENTITY_MISMATCH',
+          error: `Cross-identity mismatch rejected: The detected face matches ${otherName} (${otherRole}), not the enrolled profile for the authenticated account (${user.fullName}, ${user.role.toUpperCase()}). Attendance cannot be recorded for another person's biometric identity.`,
+          crossDistance: Number(crossDistance.toFixed(4)),
+        });
+      }
+    }
+  }
+
+  // 4B. Biometric Face Distance Matching against Authenticated Account's Enrolled Reference
   const faceDistance = calculateEuclideanDistance(enrollment.descriptor, faceDescriptor);
   if (faceDistance > FACE_MATCH_THRESHOLD) {
     db.addAuditLog(user.id, 'PERSONAL_ATTENDANCE_FACE_MISMATCH', 'FAILURE', {
@@ -549,7 +646,8 @@ router.post('/verify-personal-attendance', (req: Request, res: Response) => {
     });
     return res.status(401).json({
       success: false,
-      error: `Facial identity verification failed (Distance: ${faceDistance.toFixed(3)} >= ${FACE_MATCH_THRESHOLD}). Face did not match enrolled profile.`,
+      code: 'FACE_MISMATCH',
+      error: `Facial identity verification failed (Distance: ${faceDistance.toFixed(3)} >= ${FACE_MATCH_THRESHOLD}). Face did not match enrolled profile for ${user.fullName}.`,
       faceDistance: Number(faceDistance.toFixed(4)),
     });
   }

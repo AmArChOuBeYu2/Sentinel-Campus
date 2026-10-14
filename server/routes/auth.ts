@@ -207,11 +207,31 @@ router.post('/verify-otp', (req: Request, res: Response) => {
     user = db.getUserByEmailOrPhone(cleanCredential) || db.getUserByEmailOrPhone(credential);
   }
 
-  // If demo login with static 123456 in dev mode
+  if (!user || !user.isActive) {
+    return res.status(401).json({
+      success: false,
+      error: 'Invalid or expired verification code.',
+    });
+  }
+
+  // Authoritative Role Check: Reject any role mismatch immediately
+  const targetRole = role || user.role;
+  if (user.role !== targetRole && user.role !== 'admin') {
+    db.addAuditLog(user.id, 'LOGIN_ROLE_MISMATCH_REJECTED', 'WARNING', {
+      attemptedRole: targetRole,
+      actualRole: user.role,
+    });
+    return res.status(403).json({
+      success: false,
+      error: `Role mismatch: This account is registered as ${user.role.toUpperCase()}, not ${targetRole.toUpperCase()}. Access restricted.`,
+    });
+  }
+
+  // If demo login with static 123456 in dev mode (ONLY after role match confirmed)
   const isDev =
     process.env.NODE_ENV !== 'production' &&
     (process.env.ALLOW_SIMULATED_OTP === 'true' || process.env.ENABLE_DEMO_LOGIN === 'true');
-  if (isDev && otp === '123456' && user) {
+  if (isDev && otp === '123456') {
     db.addAuditLog(user.id, 'USER_AUTHENTICATED', 'SUCCESS', {
       role: user.role,
       identifier: user.identifierCode,
@@ -221,22 +241,6 @@ router.post('/verify-otp', (req: Request, res: Response) => {
       success: true,
       user,
       token: user.id,
-    });
-  }
-
-  if (!user || !user.isActive) {
-    return res.status(401).json({
-      success: false,
-      error: 'Invalid or expired verification code.',
-    });
-  }
-
-  // Check role match: verify selected role matches user role
-  const targetRole = role || user.role;
-  if (user.role !== targetRole && user.role !== 'admin') {
-    return res.status(403).json({
-      success: false,
-      error: `Role mismatch: This account is registered as ${user.role.toUpperCase()}, not ${targetRole.toUpperCase()}. Access restricted.`,
     });
   }
 

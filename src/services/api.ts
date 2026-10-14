@@ -139,7 +139,7 @@ class ApiService {
   // --- Attendance ---
   async submitAttendance(payload: {
     idempotencyKey?: string;
-    sessionType: 'daily_staff' | 'class_session';
+    sessionType: 'daily_staff' | 'class_session' | 'daily_personal';
     sessionId?: string;
     checkpointType: 'entry' | 'checkpoint_1' | 'checkpoint_2';
     latitude: number;
@@ -159,6 +159,7 @@ class ApiService {
   async getMyAttendance(): Promise<{
     success: boolean;
     todayStatus: {
+      hasPersonalAttendance: boolean;
       hasDailyStaffAttendance: boolean;
       latestRecord: AttendanceEvent | null;
       confirmedCountToday: number;

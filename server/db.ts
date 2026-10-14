@@ -477,10 +477,10 @@ function getInitialSeedData(): DatabaseSchema {
         id: 'att_seed_tch_1',
         idempotencyKey: `seed_tch_0001_${today}`,
         userId: 'usr_tch_0001',
-        userName: 'Dr. Rajesh Sharma',
+        userName: 'Amar Choubey',
         userRole: 'teacher',
         identifierCode: 'SC-TCH-2026-0001',
-        sessionType: 'daily_staff',
+        sessionType: 'daily_personal',
         checkpointType: 'entry',
         eventDate: today,
         capturedAt: `${today}T08:42:15Z`,
@@ -498,7 +498,7 @@ function getInitialSeedData(): DatabaseSchema {
         id: 'att_seed_stu_1',
         idempotencyKey: `seed_stu_0001_${today}_cp1`,
         userId: 'usr_stu_0001',
-        userName: 'Amar Choubey',
+        userName: 'Krishna Jha',
         userRole: 'student',
         identifierCode: 'SC-STU-2026-0001',
         sessionType: 'class_session',
@@ -523,10 +523,10 @@ function getInitialSeedData(): DatabaseSchema {
         id: 'aud_seed_1',
         timestamp: `${today}T08:42:16Z`,
         actorId: 'usr_tch_0001',
-        actorName: 'Dr. Rajesh Sharma',
+        actorName: 'Amar Choubey',
         action: 'ATTENDANCE_CONFIRMED',
         status: 'SUCCESS',
-        details: { sessionType: 'daily_staff', distanceMeters: 14 },
+        details: { sessionType: 'daily_personal', distanceMeters: 14 },
       },
     ],
   };
@@ -722,6 +722,10 @@ class Database {
   }
 
   // --- Biometric Enrollments ---
+  getEnrollments(): BiometricEnrollment[] {
+    return this.data.enrollments.filter((e) => e.isActive);
+  }
+
   getEnrollmentByUserId(userId: string): BiometricEnrollment | undefined {
     return this.data.enrollments.find((e) => e.userId === userId && e.isActive);
   }
@@ -1223,12 +1227,48 @@ class Database {
   }
 
   recordAttendance(event: Omit<AttendanceEvent, 'id'>): AttendanceEvent {
+    // 1. Idempotency Check: Return existing record if idempotencyKey already recorded
+    if (event.idempotencyKey) {
+      const existing = this.data.attendance.find((a) => a.idempotencyKey === event.idempotencyKey);
+      if (existing) {
+        return existing;
+      }
+    }
+
+    // 2. Personal Presence Gate Deduplication: Exactly one confirmed daily_personal per user per campus-local date
+    if (event.sessionType === 'daily_personal' && event.status === 'confirmed') {
+      const existingDaily = this.data.attendance.find(
+        (a) =>
+          a.userId === event.userId &&
+          a.eventDate === event.eventDate &&
+          a.sessionType === 'daily_personal' &&
+          a.status === 'confirmed'
+      );
+      if (existingDaily) {
+        return existingDaily;
+      }
+    }
+
+    // 3. Authoritative Identity Binding: Never trust client-supplied name or role
+    const authorUser = this.getUserById(event.userId);
+    const authoritativeName = authorUser ? authorUser.fullName : event.userName;
+    const authoritativeRole = authorUser ? authorUser.role : event.userRole;
+
+    // Enforce role-based sessionType boundaries
+    let sessionType = event.sessionType;
+    if (authoritativeRole === 'teacher' && sessionType === 'daily_staff') {
+      sessionType = 'daily_personal';
+    }
+
     const hashData = `${event.userId}_${event.capturedAt}_${event.latitude}_${event.longitude}_${event.status}`;
     const auditHash = crypto.createHash('sha256').update(hashData).digest('hex').slice(0, 32);
 
     const record: AttendanceEvent = {
       id: `att_${crypto.randomUUID().slice(0, 10)}`,
       ...event,
+      userName: authoritativeName,
+      userRole: authoritativeRole,
+      sessionType,
       auditHash,
     };
 

@@ -24,7 +24,7 @@ interface TeacherDashboardProps {
   campus: CampusConfig;
   classes: ClassSession[];
   onOpenAttendanceModal: (params: {
-    sessionType: 'daily_staff' | 'class_session';
+    sessionType: 'daily_personal' | 'class_session';
     checkpointType: 'entry' | 'checkpoint_1' | 'checkpoint_2';
     title: string;
   }) => void;
@@ -73,7 +73,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     try {
       const attRes = await api.getMyAttendance();
       if (attRes.success && attRes.todayStatus) {
-        setTodayConfirmed(attRes.todayStatus.hasDailyStaffAttendance);
+        setTodayConfirmed(
+          Boolean(
+            attRes.todayStatus.hasPersonalAttendance || attRes.todayStatus.hasDailyStaffAttendance
+          )
+        );
         setLatestTodayRecord(attRes.todayStatus.latestRecord);
       }
 
@@ -211,7 +215,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           <button
             onClick={() =>
               onOpenAttendanceModal({
-                sessionType: 'daily_staff',
+                sessionType: 'daily_personal',
                 checkpointType: 'entry',
                 title: 'Faculty Campus Daily Attendance',
               })
