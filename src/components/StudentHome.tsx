@@ -153,27 +153,18 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
                 </div>
 
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                  {isPresent ? (
-                    <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
-                      <CheckCircle2 className="w-3 h-3" />
-                      <span>Present</span>
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() =>
-                        onOpenAttendanceModal({
-                          sessionType: 'class_session',
-                          sessionId: cls.id,
-                          checkpointType: 'checkpoint_1',
-                          title: `${cls.courseCode}: Checkpoint 1`,
-                        })
-                      }
-                      className="inline-flex items-center space-x-1 px-3 py-1 rounded-full bg-[#800020] hover:bg-[#630018] text-white text-[11px] font-bold shadow-sm cursor-pointer transition"
+                  <div className="flex items-center space-x-1.5">
+                    <span
+                      className={`inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        isPresent
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-slate-100 text-slate-600 border border-slate-200'
+                      }`}
                     >
-                      <Camera className="w-3 h-3" />
-                      <span>Mark Presence Key</span>
-                    </button>
-                  )}
+                      {isPresent ? <CheckCircle2 className="w-3 h-3 text-emerald-600" /> : null}
+                      <span>{isPresent ? 'Present (Verified)' : 'Awaiting Teacher Scan'}</span>
+                    </span>
+                  </div>
 
                   <span className="text-[10px] text-slate-400 font-mono">
                     {cls.sessionCategory}

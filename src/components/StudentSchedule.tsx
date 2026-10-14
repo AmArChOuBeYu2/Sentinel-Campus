@@ -106,72 +106,40 @@ export const StudentSchedule: React.FC<StudentScheduleProps> = ({
                 </p>
               </div>
 
-              {/* Checkpoints Actions */}
+              {/* Checkpoints Status */}
               <div className="pt-2.5 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
                 {/* Checkpoint 1 */}
-                <div className="p-2 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between space-y-1.5">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="font-semibold text-slate-700">CP 1 (Start)</span>
+                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between space-y-1">
+                  <span className="text-[11px] font-semibold text-slate-700">CP 1: Start of Class</span>
+                  <div className="flex items-center space-x-1">
                     {cp1?.isCompleted ? (
-                      <span className="text-emerald-600 font-bold flex items-center gap-0.5 text-[10px]">
-                        <CheckCircle2 className="w-3 h-3" /> Done
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Present (Verified)</span>
                       </span>
                     ) : (
-                      <span className="text-amber-600 font-bold text-[10px]">Pending</span>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-medium">
+                        Awaiting Verification
+                      </span>
                     )}
                   </div>
-                  <button
-                    onClick={() =>
-                      onOpenAttendanceModal({
-                        sessionType: 'class_session',
-                        sessionId: cls.id,
-                        checkpointType: 'checkpoint_1',
-                        title: `${cls.courseCode}: Checkpoint 1 (Start)`,
-                      })
-                    }
-                    disabled={cp1?.isCompleted}
-                    className={`w-full py-1.5 rounded-lg text-[10px] font-bold transition flex items-center justify-center space-x-1 ${
-                      cp1?.isCompleted
-                        ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                        : 'bg-[#800020] hover:bg-[#630018] text-white cursor-pointer shadow-sm'
-                    }`}
-                  >
-                    <Camera className="w-3 h-3" />
-                    <span>{cp1?.isCompleted ? 'Verified' : 'Verify Key'}</span>
-                  </button>
                 </div>
 
                 {/* Checkpoint 2 */}
-                <div className="p-2 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between space-y-1.5">
-                  <div className="flex items-center justify-between text-[11px]">
-                    <span className="font-semibold text-slate-700">CP 2 (Mid-Class)</span>
+                <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between space-y-1">
+                  <span className="text-[11px] font-semibold text-slate-700">CP 2: Mid-Class</span>
+                  <div className="flex items-center space-x-1">
                     {cp2?.isCompleted ? (
-                      <span className="text-emerald-600 font-bold flex items-center gap-0.5 text-[10px]">
-                        <CheckCircle2 className="w-3 h-3" /> Done
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Present (Verified)</span>
                       </span>
                     ) : (
-                      <span className="text-slate-400 font-bold text-[10px]">Pending</span>
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-200 text-slate-600 text-[10px] font-medium">
+                        Awaiting Verification
+                      </span>
                     )}
                   </div>
-                  <button
-                    onClick={() =>
-                      onOpenAttendanceModal({
-                        sessionType: 'class_session',
-                        sessionId: cls.id,
-                        checkpointType: 'checkpoint_2',
-                        title: `${cls.courseCode}: Checkpoint 2 (Mid-Class)`,
-                      })
-                    }
-                    disabled={cp2?.isCompleted}
-                    className={`w-full py-1.5 rounded-lg text-[10px] font-bold transition flex items-center justify-center space-x-1 ${
-                      cp2?.isCompleted
-                        ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                        : 'bg-emerald-700 hover:bg-emerald-800 text-white cursor-pointer shadow-sm'
-                    }`}
-                  >
-                    <Camera className="w-3 h-3" />
-                    <span>{cp2?.isCompleted ? 'Verified' : 'Verify Mid Key'}</span>
-                  </button>
                 </div>
               </div>
             </div>

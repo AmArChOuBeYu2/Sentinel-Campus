@@ -148,3 +148,34 @@ export interface AuditLog {
   details: Record<string, unknown>;
   ipAddress?: string;
 }
+
+export interface CapturedStudent {
+  id: string;
+  studentId: string;
+  studentName: string;
+  identifierCode: string;
+  capturedAt: string;
+  faceDistance: number;
+  status: 'confirmed' | 'unmatched' | 'ambiguous' | 'duplicate';
+  thumbnailUrl?: string;
+  processingTimeMs: number;
+  checkpointType: 'checkpoint_1' | 'checkpoint_2';
+}
+
+export interface QRSession {
+  id: string;
+  token: string;
+  classId: string;
+  courseCode: string;
+  courseName: string;
+  teacherId: string;
+  teacherName: string;
+  checkpointType: 'checkpoint_1' | 'checkpoint_2';
+  createdAt: string;
+  expiresAt: string;
+  isActive: boolean;
+  captures: CapturedStudent[];
+  remainingSeconds?: number;
+  qrPayload?: string;
+}
+

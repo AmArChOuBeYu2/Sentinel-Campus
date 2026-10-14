@@ -18,55 +18,58 @@ export function getAuthenticatedUser(req: Request) {
   return null;
 }
 
+import { otpService } from '../services/otpService';
+
 // POST /api/auth/login - Step 1: Validate Role, Phone/Email and Institutional Key
-router.post('/login', (req: Request, res: Response) => {
+router.post('/login', async (req: Request, res: Response) => {
   const { role, credential, institutionalKey } = req.body;
 
   if (!role) {
     return res.status(400).json({ success: false, error: 'Please select a login role.' });
   }
 
-  // Find user by institutional key or phone/email
+  // Find user by phone, email, or institutional key
   let user = null;
-  if (institutionalKey) {
-    user = db.getUserByIdentifier(institutionalKey);
-  } else if (credential) {
-    user = db.getUserByEmailOrPhone(credential);
-  } else {
-    // Demo fallback for quick role switch
-    user = db.getUsers().find((u) => u.role === (role as UserRole) && u.isActive);
+  if (credential && credential.trim()) {
+    user = db.getUserByEmailOrPhone(credential.trim());
+  }
+  if (!user && institutionalKey && institutionalKey.trim()) {
+    user = db.getUserByIdentifier(institutionalKey.trim());
   }
 
   if (!user || !user.isActive) {
     return res.status(401).json({
       success: false,
-      error: 'Invalid institutional key or unverified credential.',
+      error: 'Unrecognized credentials. No active account found matching this phone number or email.',
     });
   }
 
-  // Check role match
+  // Check role match: Prevent privilege escalation across roles
   if (user.role !== role && user.role !== 'admin') {
     return res.status(403).json({
       success: false,
-      error: `Role mismatch: This institutional ID is registered as a ${user.role}, not ${role}.`,
+      error: `Role mismatch: This account is registered as ${user.role.toUpperCase()}, not ${role.toUpperCase()}. Access restricted.`,
     });
   }
 
-  // Generate simulated 6-digit OTP for demo mode
-  const simulatedOtp = '123456';
+  // Send passcode via configured OTP adapter (simulated in dev, provider in prod)
+  const otpCode = '123456';
+  const otpRes = await otpService.sendOtp(user.phone, otpCode);
 
   db.addAuditLog(user.id, 'USER_LOGIN_OTP_REQUESTED', 'SUCCESS', {
     role: user.role,
     identifier: user.identifierCode,
+    provider: otpRes.provider,
   });
 
   return res.json({
     success: true,
-    message: `OTP sent to ${user.phone}. For demonstration, enter OTP: ${simulatedOtp}`,
+    message: otpRes.message,
     userId: user.id,
     identifierCode: user.identifierCode,
     phoneMasked: user.phone.replace(/(\+91\s\d{2})\d{4}(\d{4})/, '$1 **** $2'),
-    simulatedOtp,
+    simulatedOtp: otpRes.isSimulated ? otpRes.simulatedOtp : undefined,
+    isSimulated: otpRes.isSimulated,
   });
 });
 

@@ -583,28 +583,7 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
                 </div>
               )}
 
-              {/* Presence Key Input for Class Sessions */}
-              {sessionType === 'class_session' && (
-                <div className="p-3 bg-slate-900 border border-slate-700 rounded-xl space-y-1.5">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-slate-200">
-                      Classroom Presence Key ({checkpointType === 'checkpoint_1' ? 'Start' : 'Mid-Class'})
-                    </span>
-                    <span className="text-[10px] text-cyan-400 font-mono">Issued by Teacher</span>
-                  </div>
-                  <input
-                    type="text"
-                    required
-                    value={presenceKey}
-                    onChange={(e) => setPresenceKey(e.target.value.toUpperCase())}
-                    placeholder="e.g. SC-7829"
-                    className="w-full font-mono text-center tracking-widest uppercase bg-slate-950 border border-slate-700 rounded-lg py-2 text-white font-bold text-sm focus:outline-none focus:border-cyan-400"
-                  />
-                  <p className="text-[10px] text-slate-400 text-center">
-                    Enter the code displayed on your instructor&apos;s screen.
-                  </p>
-                </div>
-              )}
+
 
               {/* Security Protocol Banner */}
               <div className="text-[11px] text-slate-400 text-center flex items-center justify-center gap-1.5">

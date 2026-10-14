@@ -10,11 +10,13 @@ import {
 import { Navbar } from './components/Navbar';
 import { DemoControlBar } from './components/DemoControlBar';
 import { LoginScreen } from './components/LoginScreen';
+import { LandingPage } from './components/LandingPage';
 import { AdminLoginScreen } from './components/AdminLoginScreen';
 import { StudentDashboard } from './components/StudentDashboard';
 import { TeacherDashboard } from './components/TeacherDashboard';
 import { StaffDashboard } from './components/StaffDashboard';
 import { AdminDashboard } from './components/AdminDashboard';
+import { TeacherLaptopConsole } from './components/TeacherLaptopConsole';
 import { AttendanceModal } from './components/AttendanceModal';
 import { EnrollmentModal } from './components/EnrollmentModal';
 import { OfflineQueueDrawer } from './components/OfflineQueueDrawer';
@@ -226,12 +228,25 @@ function AppContent() {
           }
         />
 
-        {/* Route 3: Role-Protected Root (/) - Student, Teacher, Staff dashboards */}
+        {/* Route 3: Teacher Laptop Web Console (/teacher/console) */}
+        <Route
+          path="/teacher/console"
+          element={
+            <TeacherLaptopConsole
+              user={user}
+              campus={campus}
+              onLogout={handleLogout}
+              onOpenAttendanceModal={(params) => setAttendanceParams(params || {})}
+            />
+          }
+        />
+
+        {/* Route 4: Root (/) - Landing Page if unauthenticated; Role dashboard if authenticated */}
         <Route
           path="/"
           element={
             !user ? (
-              <Navigate to="/login" replace />
+              <LandingPage />
             ) : user.role === 'admin' ? (
               <Navigate to="/admin" replace />
             ) : (

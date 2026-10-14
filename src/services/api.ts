@@ -7,6 +7,8 @@ import {
   Notice,
   PresenceKey,
   UserRole,
+  QRSession,
+  CapturedStudent,
 } from '../types';
 
 const API_BASE = '/api';
@@ -204,6 +206,81 @@ class ApiService {
     }>;
   }> {
     return this.request(`/classes/${sessionId}/roster`);
+  }
+
+  // --- Laptop & Mobile QR Classroom Attendance ---
+  async generateQRSession(
+    classId: string,
+    checkpointType: 'checkpoint_1' | 'checkpoint_2'
+  ): Promise<{ success: boolean; session: QRSession; message: string }> {
+    return this.request(`/classes/${classId}/qr-session`, {
+      method: 'POST',
+      body: JSON.stringify({ checkpointType }),
+    });
+  }
+
+  async getQRSession(token: string): Promise<{ success: boolean; session: QRSession }> {
+    return this.request(`/classes/qr-session/${token}`);
+  }
+
+  async captureStudentAttendance(
+    token: string,
+    data: { faceDescriptor: number[]; thumbnailUrl?: string }
+  ): Promise<{
+    success: boolean;
+    status: 'confirmed' | 'unmatched' | 'ambiguous' | 'duplicate';
+    message?: string;
+    error?: string;
+    capture: CapturedStudent;
+    matchedStudent?: UserProfile;
+    confidence: number;
+  }> {
+    return this.request(`/classes/qr-session/${token}/capture`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getQRSessionStatus(token: string): Promise<{
+    success: boolean;
+    session: QRSession;
+    stats: {
+      totalStudents: number;
+      identifiedCount: number;
+      pendingCount: number;
+      rejectedCount: number;
+      notCapturedCount: number;
+    };
+    rosterBreakdown: Array<{
+      studentId: string;
+      fullName: string;
+      identifierCode: string;
+      department: string;
+      status: 'confirmed' | 'pending' | 'rejected' | 'not_captured';
+      capturedAt: string | null;
+      faceDistance: number | null;
+      thumbnailUrl: string | null;
+    }>;
+    recentCaptures: CapturedStudent[];
+  }> {
+    return this.request(`/classes/qr-session/${token}/status`);
+  }
+
+  async closeQRSession(token: string): Promise<{
+    success: boolean;
+    message: string;
+    session: QRSession;
+    summary: {
+      classId: string;
+      checkpointType: string;
+      totalCaptures: number;
+      confirmed: number;
+      unmatched: number;
+    };
+  }> {
+    return this.request(`/classes/qr-session/${token}/close`, {
+      method: 'POST',
+    });
   }
 
   // --- Notices ---

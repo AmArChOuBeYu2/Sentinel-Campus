@@ -5,14 +5,13 @@ import {
   Building2,
   ShieldCheck,
   ArrowRight,
-  KeyRound,
   Phone,
   Mail,
   Lock,
   Sparkles,
   AlertCircle,
   RefreshCw,
-  UserCheck,
+  ChevronLeft,
 } from 'lucide-react';
 import { UserRole, UserProfile } from '../types';
 import { api } from '../services/api';
@@ -22,50 +21,55 @@ interface LoginScreenProps {
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
+  const [stage, setStage] = useState<'role_select' | 'auth'>('role_select');
   const [selectedRole, setSelectedRole] = useState<UserRole>('student');
-  const [step, setStep] = useState<'credentials' | 'otp'>('credentials');
   const [credential, setCredential] = useState('amar.choubey@skit.ac.in');
-  const [institutionalKey, setInstitutionalKey] = useState('SC-STU-2026-0001');
-  const [otp, setOtp] = useState('123456');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otp, setOtp] = useState('');
   const [simulatedOtp, setSimulatedOtp] = useState<string | null>(null);
   const [phoneMasked, setPhoneMasked] = useState<string>('');
   const [activeUserId, setActiveUserId] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Sync sample credentials on role change
   const handleSelectRole = (role: UserRole) => {
     setSelectedRole(role);
     setErrorMsg(null);
+    setOtpSent(false);
+    setOtp('');
+    setSimulatedOtp(null);
+
     if (role === 'student') {
       setCredential('amar.choubey@skit.ac.in');
-      setInstitutionalKey('SC-STU-2026-0001');
     } else if (role === 'teacher') {
       setCredential('rajesh.sharma@skit.ac.in');
-      setInstitutionalKey('SC-TCH-2026-0001');
     } else if (role === 'staff') {
       setCredential('priya.mehta@skit.ac.in');
-      setInstitutionalKey('SC-STA-2026-0001');
     }
+    setStage('auth');
   };
 
-  const handleRequestOtp = async (e: React.FormEvent) => {
+  const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!credential.trim()) {
+      setErrorMsg('Please enter your registered phone number or institutional email.');
+      return;
+    }
+
     setLoading(true);
     setErrorMsg(null);
     try {
       const res = await api.requestLogin({
         role: selectedRole,
-        credential,
-        institutionalKey,
+        credential: credential.trim(),
       });
 
       if (res.success) {
-        setSimulatedOtp(res.simulatedOtp);
+        setSimulatedOtp(res.simulatedOtp || null);
         setPhoneMasked(res.phoneMasked);
         setActiveUserId(res.userId);
-        setOtp(res.simulatedOtp); // Pre-fill in demo mode for frictionless testing
-        setStep('otp');
+        setOtp(res.simulatedOtp || '');
+        setOtpSent(true);
       }
     } catch (err: unknown) {
       const e = err as Error;
@@ -77,11 +81,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!otp || otp.length !== 6) {
+      setErrorMsg('Please enter the 6-digit passcode.');
+      return;
+    }
+
     setLoading(true);
     setErrorMsg(null);
     try {
       const res = await api.verifyOtp(activeUserId, otp);
       if (res.success && res.user) {
+        if (res.user.role !== selectedRole && res.user.role !== 'admin') {
+          setErrorMsg(`Role mismatch: Account is registered as ${res.user.role}, not ${selectedRole}.`);
+          return;
+        }
         onLoginSuccess(res.user);
       }
     } catch (err: unknown) {
@@ -92,7 +105,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  // Instant 1-click Demo Shortcut
   const handleQuickDemo = async (userId: string) => {
     setLoading(true);
     setErrorMsg(null);
@@ -110,9 +122,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-8 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-slate-50 flex flex-col justify-center py-8 px-4 sm:px-6 lg:px-8 selection:bg-[#800020] selection:text-white">
       <div className="max-w-md w-full mx-auto space-y-6">
-        {/* Institutional Header */}
+        {/* Branding Crest */}
         <div className="text-center space-y-2">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[#800020] text-white shadow-lg shadow-[#800020]/20 mb-1">
             <ShieldCheck className="w-8 h-8" />
@@ -126,295 +138,281 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           </p>
         </div>
 
-        {/* Card Container */}
+        {/* Main Card */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-7 space-y-5">
-          {step === 'credentials' ? (
-            <>
-              {/* Question */}
+          {stage === 'role_select' ? (
+            /* STAGE 1: Role Selection Cards */
+            <div className="space-y-4">
               <div className="space-y-1">
-                <h2 className="text-base font-bold text-slate-900">How are you logging in?</h2>
+                <h2 className="text-base font-bold text-slate-900">Select Your Role</h2>
                 <p className="text-xs text-slate-500">
-                  Select your institutional affiliation to begin authentication.
+                  Choose your institutional affiliation to begin authentication.
                 </p>
               </div>
 
-              {/* 3 Visually Distinct Role Cards */}
               <div className="grid grid-cols-1 gap-2.5">
-                {/* 1. Student */}
+                {/* 1. Student Card */}
                 <button
                   type="button"
                   onClick={() => handleSelectRole('student')}
-                  className={`flex items-start p-3.5 rounded-xl border text-left transition cursor-pointer ${
-                    selectedRole === 'student'
-                      ? 'border-[#800020] bg-[#fffbfb] ring-2 ring-[#800020]/15'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
+                  className="flex items-start p-3.5 rounded-xl border border-slate-200 bg-white hover:border-[#800020] hover:bg-[#fffbfb] transition text-left cursor-pointer group shadow-2xs"
                 >
-                  <div
-                    className={`p-2 rounded-lg mr-3 shrink-0 ${
-                      selectedRole === 'student'
-                        ? 'bg-[#800020] text-white'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
+                  <div className="p-2 rounded-lg bg-slate-100 text-slate-600 group-hover:bg-[#800020] group-hover:text-white mr-3 shrink-0 transition">
                     <GraduationCap className="w-5 h-5" />
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs text-slate-900">Student</span>
-                      {selectedRole === 'student' && (
-                        <span className="text-[10px] font-bold text-[#800020] uppercase bg-[#800020]/10 px-2 py-0.5 rounded-full">
-                          Selected
-                        </span>
-                      )}
+                      <span className="font-bold text-xs text-slate-900 group-hover:text-[#800020]">Student</span>
+                      <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-[#800020] transition" />
                     </div>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Lectures, classroom presence keys, timetable &amp; slot attendance.
+                      Lectures, timetable, slot attendance &amp; checkpoint statuses.
                     </p>
                   </div>
                 </button>
 
-                {/* 2. Teacher */}
+                {/* 2. Teacher Card */}
                 <button
                   type="button"
                   onClick={() => handleSelectRole('teacher')}
-                  className={`flex items-start p-3.5 rounded-xl border text-left transition cursor-pointer ${
-                    selectedRole === 'teacher'
-                      ? 'border-[#800020] bg-[#fffbfb] ring-2 ring-[#800020]/15'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
+                  className="flex items-start p-3.5 rounded-xl border border-slate-200 bg-white hover:border-[#800020] hover:bg-[#fffbfb] transition text-left cursor-pointer group shadow-2xs"
                 >
-                  <div
-                    className={`p-2 rounded-lg mr-3 shrink-0 ${
-                      selectedRole === 'teacher'
-                        ? 'bg-[#800020] text-white'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
+                  <div className="p-2 rounded-lg bg-slate-100 text-slate-600 group-hover:bg-[#800020] group-hover:text-white mr-3 shrink-0 transition">
                     <Presentation className="w-5 h-5" />
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs text-slate-900">Teacher</span>
-                      {selectedRole === 'teacher' && (
-                        <span className="text-[10px] font-bold text-[#800020] uppercase bg-[#800020]/10 px-2 py-0.5 rounded-full">
-                          Selected
-                        </span>
-                      )}
+                      <span className="font-bold text-xs text-slate-900 group-hover:text-[#800020]">Teacher</span>
+                      <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-[#800020] transition" />
                     </div>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Generate Presence Keys, track classroom rosters &amp; verify presence.
+                      Mark faculty attendance, scan class QR &amp; capture student presence.
                     </p>
                   </div>
                 </button>
 
-                {/* 3. Staff / Other Professional */}
+                {/* 3. Staff Card */}
                 <button
                   type="button"
                   onClick={() => handleSelectRole('staff')}
-                  className={`flex items-start p-3.5 rounded-xl border text-left transition cursor-pointer ${
-                    selectedRole === 'staff'
-                      ? 'border-[#800020] bg-[#fffbfb] ring-2 ring-[#800020]/15'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
+                  className="flex items-start p-3.5 rounded-xl border border-slate-200 bg-white hover:border-[#800020] hover:bg-[#fffbfb] transition text-left cursor-pointer group shadow-2xs"
                 >
-                  <div
-                    className={`p-2 rounded-lg mr-3 shrink-0 ${
-                      selectedRole === 'staff'
-                        ? 'bg-[#800020] text-white'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
+                  <div className="p-2 rounded-lg bg-slate-100 text-slate-600 group-hover:bg-[#800020] group-hover:text-white mr-3 shrink-0 transition">
                     <Building2 className="w-5 h-5" />
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-xs text-slate-900">Staff / Other Professional</span>
-                      {selectedRole === 'staff' && (
-                        <span className="text-[10px] font-bold text-[#800020] uppercase bg-[#800020]/10 px-2 py-0.5 rounded-full">
-                          Selected
-                        </span>
-                      )}
+                      <span className="font-bold text-xs text-slate-900 group-hover:text-[#800020]">Staff / Administration</span>
+                      <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-[#800020] transition" />
                     </div>
                     <p className="text-[11px] text-slate-500 mt-0.5">
-                      Direct mobile camera gate-replacement attendance &amp; department presence.
+                      Personal biometric attendance, gate replacement &amp; verification history.
                     </p>
                   </div>
                 </button>
               </div>
-
-              {/* Login Form */}
-              <form onSubmit={handleRequestOtp} className="space-y-3.5 pt-2">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    Unique Institutional Key
-                  </label>
-                  <div className="relative">
-                    <KeyRound className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                    <input
-                      type="text"
-                      required
-                      value={institutionalKey}
-                      onChange={(e) => setInstitutionalKey(e.target.value)}
-                      placeholder="e.g. SC-STU-2026-0001"
-                      className="w-full pl-9 pr-3 py-2 text-xs font-mono uppercase bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#800020]/20 focus:border-[#800020]"
-                    />
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    Assigned by Academic Administration Office.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    Registered Email or Phone Number
-                  </label>
-                  <div className="relative">
-                    <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                    <input
-                      type="text"
-                      required
-                      value={credential}
-                      onChange={(e) => setCredential(e.target.value)}
-                      placeholder="e.g. student@skit.ac.in or +91 98765 43210"
-                      className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#800020]/20 focus:border-[#800020]"
-                    />
-                  </div>
-                </div>
-
-                {errorMsg && (
-                  <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center space-x-2">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>{errorMsg}</span>
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full py-3 rounded-xl bg-[#800020] hover:bg-[#630018] text-white font-bold text-xs tracking-wide transition flex items-center justify-center space-x-2 shadow-md shadow-[#800020]/20 cursor-pointer"
-                >
-                  {loading ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Verifying Institutional ID...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Continue with Institutional Verification</span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
-              </form>
-            </>
+            </div>
           ) : (
-            /* OTP Screen */
-            <form onSubmit={handleVerifyOtp} className="space-y-4">
-              <div className="text-center space-y-1">
-                <div className="w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center mx-auto">
-                  <Phone className="w-6 h-6" />
-                </div>
-                <h3 className="text-base font-bold text-slate-900">OTP Verification</h3>
-                <p className="text-xs text-slate-500">
-                  Enter the 6-digit one-time passcode sent to{' '}
-                  <span className="font-semibold text-slate-800">{phoneMasked}</span>
-                </p>
+            /* STAGE 2: Phone / Email Authentication & OTP */
+            <div className="space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStage('role_select');
+                    setOtpSent(false);
+                    setErrorMsg(null);
+                  }}
+                  className="flex items-center text-xs font-semibold text-slate-500 hover:text-slate-800 transition cursor-pointer"
+                >
+                  <ChevronLeft className="w-4 h-4 mr-1" />
+                  <span>Change Role</span>
+                </button>
+                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-[#800020]/10 text-[#800020]">
+                  {selectedRole} Portal
+                </span>
               </div>
 
-              {simulatedOtp && (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs text-center space-y-1">
-                  <span className="font-bold block">Demonstration Mode Active:</span>
-                  <span>Simulated OTP delivered: <strong className="font-mono text-sm">{simulatedOtp}</strong></span>
-                </div>
+              {!otpSent ? (
+                /* Step 2A: Phone or Email input + Send OTP */
+                <form onSubmit={handleSendOtp} className="space-y-4">
+                  <div className="space-y-1">
+                    <h3 className="text-sm font-bold text-slate-900">Institutional Identity</h3>
+                    <p className="text-xs text-slate-500">
+                      Enter your registered mobile phone number or SKIT email address.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Phone Number or Email Address
+                    </label>
+                    <div className="relative">
+                      {credential.includes('@') ? (
+                        <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                      ) : (
+                        <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                      )}
+                      <input
+                        type="text"
+                        required
+                        value={credential}
+                        onChange={(e) => setCredential(e.target.value)}
+                        placeholder="e.g. +91 98765 43210 or user@skit.ac.in"
+                        className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:border-[#800020] focus:ring-2 focus:ring-[#800020]/20"
+                      />
+                    </div>
+                  </div>
+
+                  {errorMsg && (
+                    <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center space-x-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-2.5 rounded-xl bg-[#800020] hover:bg-[#630018] text-white font-bold text-xs tracking-wide transition flex items-center justify-center space-x-2 shadow-md shadow-[#800020]/20 cursor-pointer disabled:opacity-50"
+                  >
+                    {loading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Sending One-Time Passcode...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Send OTP</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+                </form>
+              ) : (
+                /* Step 2B: OTP Input + Verify and Login */
+                <form onSubmit={handleVerifyOtp} className="space-y-4">
+                  <div className="text-center space-y-1">
+                    <div className="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200 flex items-center justify-center mx-auto">
+                      <Lock className="w-5 h-5" />
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-900">Enter Verification Code</h3>
+                    <p className="text-xs text-slate-500">
+                      Passcode sent to <strong className="text-slate-800">{phoneMasked}</strong>
+                    </p>
+                  </div>
+
+                  {simulatedOtp && (
+                    <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs text-center space-y-0.5">
+                      <span className="font-bold text-[10px] uppercase tracking-wider block text-amber-900">
+                        DEMO Verification Mode:
+                      </span>
+                      <span>Simulated Passcode: <strong className="font-mono text-sm font-bold">{simulatedOtp}</strong></span>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-center text-xs font-semibold text-slate-700 mb-1.5">
+                      6-Digit OTP Code
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={6}
+                      required
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value)}
+                      placeholder="123456"
+                      className="w-full py-2 text-center font-mono text-xl tracking-[0.4em] bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:border-[#800020] focus:ring-2 focus:ring-[#800020]/20"
+                    />
+                  </div>
+
+                  {errorMsg && (
+                    <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center space-x-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full py-2.5 rounded-xl bg-[#800020] hover:bg-[#630018] text-white font-bold text-xs tracking-wide transition flex items-center justify-center space-x-2 shadow-md shadow-[#800020]/20 cursor-pointer disabled:opacity-50"
+                  >
+                    {loading ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Lock className="w-4 h-4" />
+                        <span>Verify and Login</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOtpSent(false);
+                      setOtp('');
+                      setErrorMsg(null);
+                    }}
+                    className="w-full text-center text-xs text-slate-500 hover:text-slate-800 underline cursor-pointer"
+                  >
+                    Resend passcode or change contact info
+                  </button>
+                </form>
               )}
-
-              <div>
-                <label className="block text-center text-xs font-semibold text-slate-700 mb-2">
-                  Enter 6-Digit Passcode
-                </label>
-                <input
-                  type="text"
-                  maxLength={6}
-                  required
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                  className="w-full py-2.5 text-center font-mono text-xl tracking-[0.5em] bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:border-[#800020] focus:ring-2 focus:ring-[#800020]/20"
-                />
-              </div>
-
-              {errorMsg && (
-                <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center space-x-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{errorMsg}</span>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 rounded-xl bg-[#800020] hover:bg-[#630018] text-white font-bold text-xs tracking-wide transition flex items-center justify-center space-x-2 shadow-md shadow-[#800020]/20 cursor-pointer"
-              >
-                {loading ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : (
-                  <>
-                    <Lock className="w-4 h-4" />
-                    <span>Verify Passcode &amp; Access Campus Portal</span>
-                  </>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setStep('credentials')}
-                className="w-full text-center text-xs text-slate-500 hover:text-slate-800 underline"
-              >
-                Back to institutional credentials
-              </button>
-            </form>
+            </div>
           )}
 
-          {/* 1-Click Demo Evaluation Shortcut for Judges */}
-          <div className="pt-4 border-t border-slate-100 space-y-2">
-            <div className="flex items-center justify-between text-[11px] text-slate-400">
+          {/* Local Evaluation Quick Shortcut for 4 Demo Accounts */}
+          <div className="pt-3 border-t border-slate-100 space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] text-slate-400">
               <span className="font-semibold text-slate-700 flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-[#800020]" /> Hackathon Judge Quick Logins:
+                <Sparkles className="w-3 h-3 text-[#800020]" /> Demo Evaluation Quick Sign-In:
               </span>
-              <span>1-Click Bypass</span>
+              <span className="font-mono text-[#800020] font-bold">1-Click</span>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 text-[11px]">
+            <div className="grid grid-cols-3 gap-1.5 text-[10px]">
               <button
                 type="button"
                 onClick={() => handleQuickDemo('usr_stu_0001')}
-                className="p-2 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
+                className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Student</div>
-                <div className="text-[10px] text-slate-500 truncate">Amar Choubey</div>
+                <div className="text-[9px] text-slate-500 truncate">Amar Choubey</div>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleQuickDemo('usr_tch_0001')}
-                className="p-2 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
+                className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Teacher</div>
-                <div className="text-[10px] text-slate-500 truncate">Dr. Rajesh Sharma</div>
+                <div className="text-[9px] text-slate-500 truncate">Dr. Rajesh Sharma</div>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleQuickDemo('usr_sta_0001')}
-                className="p-2 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
+                className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Staff</div>
-                <div className="text-[10px] text-slate-500 truncate">Er. Priya Mehta</div>
+                <div className="text-[9px] text-slate-500 truncate">Er. Priya Mehta</div>
               </button>
             </div>
           </div>
+        </div>
+
+        {/* Back to Public Landing */}
+        <div className="text-center">
+          <a href="/" className="text-xs text-slate-500 hover:text-slate-800 underline">
+            ← Return to Sentinel Campus Home
+          </a>
         </div>
       </div>
     </div>
   );
 };
+
+export default LoginScreen;

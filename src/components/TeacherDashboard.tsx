@@ -1,23 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import {
   Presentation,
-  KeyRound,
+  QrCode,
   Users,
   Camera,
   Clock,
   CheckCircle2,
   XCircle,
   Sparkles,
-  QrCode,
-  RefreshCw,
   MapPin,
   ChevronRight,
   ShieldCheck,
   AlertCircle,
+  ExternalLink,
+  Laptop,
 } from 'lucide-react';
 import { UserProfile, CampusConfig, ClassSession, AttendanceEvent } from '../types';
 import { api } from '../services/api';
 import { geofenceService } from '../services/geofence';
+import { ClassQRScannerModal } from './ClassQRScannerModal';
+import { ClassStudentCaptureModal } from './ClassStudentCaptureModal';
 
 interface TeacherDashboardProps {
   user: UserProfile;
@@ -41,17 +43,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   refreshTrigger,
 }) => {
   const [selectedClass, setSelectedClass] = useState<ClassSession>(classes[0] || null);
-  const [activeKey1, setActiveKey1] = useState<string | null>(selectedClass?.activePresenceKey1 || 'SC-7829');
-  const [activeKey2, setActiveKey2] = useState<string | null>(selectedClass?.activePresenceKey2 || 'SC-4190');
-  const [generatingKey, setGeneratingKey] = useState(false);
   const [todayConfirmed, setTodayConfirmed] = useState(false);
   const [latestTodayRecord, setLatestTodayRecord] = useState<AttendanceEvent | null>(null);
-
-  // 5-minute Countdown Timers (Priority 3)
-  const [key1ExpiresAt, setKey1ExpiresAt] = useState<number>(() => Date.now() + 300 * 1000);
-  const [key2ExpiresAt, setKey2ExpiresAt] = useState<number>(() => Date.now() + 300 * 1000);
-  const [key1Remaining, setKey1Remaining] = useState<number>(300);
-  const [key2Remaining, setKey2Remaining] = useState<number>(300);
 
   // Classroom roster
   const [roster, setRoster] = useState<Array<{
@@ -68,30 +61,20 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   // Live Geofence Preview
   const [geoStatus, setGeoStatus] = useState({ distanceMeters: 14, isInside: true });
 
-  // Real-time countdown interval (every second)
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = Date.now();
-      const rem1 = Math.max(0, Math.floor((key1ExpiresAt - now) / 1000));
-      const rem2 = Math.max(0, Math.floor((key2ExpiresAt - now) / 1000));
-      setKey1Remaining(rem1);
-      setKey2Remaining(rem2);
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [key1ExpiresAt, key2ExpiresAt]);
-
-  const formatCountdown = (totalSeconds: number) => {
-    if (totalSeconds <= 0) return '00:00';
-    const m = Math.floor(totalSeconds / 60);
-    const s = totalSeconds % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
+  // Mobile QR Scanner & Capture Modals State
+  const [isQRScannerOpen, setIsQRScannerOpen] = useState(false);
+  const [activeScanClass, setActiveScanClass] = useState<ClassSession | null>(null);
+  const [activeSessionData, setActiveSessionData] = useState<{
+    token: string;
+    classId: string;
+    checkpoint: 'checkpoint_1' | 'checkpoint_2';
+    session: any;
+  } | null>(null);
 
   const loadTeacherData = async () => {
     try {
       const attRes = await api.getMyAttendance();
-      if (attRes.success) {
+      if (attRes.success && attRes.todayStatus) {
         setTodayConfirmed(attRes.todayStatus.hasDailyStaffAttendance);
         setLatestTodayRecord(attRes.todayStatus.latestRecord);
       }
@@ -126,42 +109,48 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     loadTeacherData();
   }, [refreshTrigger, campus, selectedClass]);
 
-  // Generate new Presence Key
-  const handleGenerateKey = async (checkpointType: 'checkpoint_1' | 'checkpoint_2') => {
-    if (!selectedClass) return;
-    setGeneratingKey(true);
-    try {
-      const res = await api.generatePresenceKey(selectedClass.id, checkpointType);
-      if (res.success) {
-        const expiresMs = res.presenceKey.expiresAt
-          ? new Date(res.presenceKey.expiresAt).getTime()
-          : Date.now() + 300 * 1000;
+  const handleStartQRScan = (cls: ClassSession) => {
+    setActiveScanClass(cls);
+    setIsQRScannerOpen(true);
+  };
 
-        if (checkpointType === 'checkpoint_1') {
-          setActiveKey1(res.presenceKey.key);
-          setKey1ExpiresAt(expiresMs);
-          setKey1Remaining(300);
-        }
-        if (checkpointType === 'checkpoint_2') {
-          setActiveKey2(res.presenceKey.key);
-          setKey2ExpiresAt(expiresMs);
-          setKey2Remaining(300);
-        }
-      }
-    } catch (err: unknown) {
-      const e = err as Error;
-      alert('Failed to generate Presence Key: ' + e.message);
-    } finally {
-      setGeneratingKey(false);
-    }
+  const handleSessionVerified = (sessionData: {
+    token: string;
+    classId: string;
+    checkpoint: 'checkpoint_1' | 'checkpoint_2';
+    session: any;
+  }) => {
+    setIsQRScannerOpen(false);
+    setActiveSessionData(sessionData);
   };
 
   return (
-    <div className="space-y-5 pb-20">
-      {/* 1. Pale Cream Faculty Banner */}
+    <div className="space-y-4 pb-20">
+      {/* 1. Biometric Profile Warning if Unenrolled */}
+      {!user.isEnrolled && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 shadow-sm flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+              <Camera className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-amber-950">Biometric Profile Not Enrolled</h3>
+              <p className="text-[11px] text-amber-800">Enroll your face to verify campus gate presence.</p>
+            </div>
+          </div>
+          <button
+            onClick={onOpenEnrollment}
+            className="px-3 py-1.5 rounded-xl bg-[#800020] hover:bg-[#630018] text-white text-xs font-bold shrink-0 transition shadow-sm cursor-pointer"
+          >
+            Enroll Face
+          </button>
+        </div>
+      )}
+
+      {/* 2. Top Faculty Profile Banner */}
       <div className="p-4 rounded-2xl bg-[#fdfbf7] border border-[#f5eedb] shadow-sm flex items-center justify-between">
         <div className="flex items-center space-x-3.5">
-          <div className="w-12 h-12 rounded-xl bg-[#800020] text-white flex items-center justify-center font-bold text-sm shrink-0">
+          <div className="w-12 h-12 rounded-2xl bg-[#800020] text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-sm">
             <Presentation className="w-6 h-6" />
           </div>
 
@@ -173,46 +162,52 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               </span>
             </div>
             <div className="text-[11px] text-slate-500 mt-0.5">
-              ID: <span className="font-mono text-slate-700 font-semibold">{user.identifierCode}</span> • {user.department}
+              ID: <span className="font-mono text-slate-700 font-semibold">{user.identifierCode}</span> • {user.department || 'Computer Science'}
             </div>
           </div>
         </div>
 
         <div className="text-right">
-          <span className="text-[11px] text-slate-400 block">Assigned Lectures</span>
+          <span className="text-[11px] text-slate-400 block">Lectures</span>
           <span className="text-sm font-black text-slate-900">{classes.length} Today</span>
         </div>
       </div>
 
-      {/* 2. Personal Faculty Gate Attendance (Section 5 requirement) */}
+      {/* 3. Prominent Mark My Attendance Action at the Top (Section 5 Requirement) */}
       <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-slate-600">
-              <Clock className="w-4 h-4" />
+          <div className="flex items-center space-x-2.5">
+            <div
+              className={`w-9 h-9 rounded-xl flex items-center justify-center text-white ${
+                todayConfirmed ? 'bg-emerald-600' : 'bg-[#800020]'
+              }`}
+            >
+              <Clock className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-xs font-bold text-slate-900">Personal Faculty Attendance</h3>
-              <p className="text-[10px] text-slate-400">Gate Biometric Queue Replacement</p>
+              <h3 className="text-xs font-bold text-slate-900">Mark My Daily Attendance</h3>
+              <p className="text-[10px] text-slate-400">Independent Campus Presence Verification</p>
             </div>
           </div>
 
           {todayConfirmed ? (
-            <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+            <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
               <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>Confirmed</span>
+              <span>Verified Today</span>
             </span>
           ) : (
-            <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold">
-              Not Recorded Yet
+            <span className="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-bold">
+              Attendance Pending
             </span>
           )}
         </div>
 
-        <div className="flex items-center justify-between text-xs text-slate-600 pt-1">
-          <span className="flex items-center gap-1">
-            <MapPin className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Presence: <strong>{geoStatus.distanceMeters}m</strong> from SKIT Center ({geoStatus.isInside ? 'Inside' : 'Outside'})</span>
+        <div className="flex items-center justify-between text-xs text-slate-600 pt-1 border-t border-slate-100">
+          <span className="flex items-center gap-1.5 text-[11px]">
+            <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span>
+              {geoStatus.distanceMeters}m from SKIT ({geoStatus.isInside ? 'Inside' : 'Outside'})
+            </span>
           </span>
 
           <button
@@ -220,180 +215,191 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               onOpenAttendanceModal({
                 sessionType: 'daily_staff',
                 checkpointType: 'entry',
-                title: 'Faculty Personal Attendance',
+                title: 'Faculty Campus Daily Attendance',
               })
             }
-            className={`px-3 py-1.5 rounded-xl font-bold text-xs transition cursor-pointer ${
+            className={`px-3.5 py-1.5 rounded-xl font-bold text-xs transition cursor-pointer flex items-center space-x-1.5 ${
               todayConfirmed
                 ? 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 : 'bg-[#800020] text-white hover:bg-[#630018] shadow-md shadow-[#800020]/20'
             }`}
           >
-            {todayConfirmed ? 'Re-Verify Gate Entry' : 'Mark Gate Attendance (Camera)'}
+            <Camera className="w-3.5 h-3.5" />
+            <span>{todayConfirmed ? 'Re-Verify Gate Attendance' : 'Mark Attendance (Camera)'}</span>
           </button>
         </div>
       </div>
 
-      {/* 3. Classroom Presence Keys Management (Section 9 requirement) */}
+      {/* 4. Link to Teacher Laptop Web Console */}
+      <a
+        href="/teacher/console"
+        className="p-3.5 rounded-2xl bg-slate-900 text-white flex items-center justify-between shadow-sm hover:bg-slate-800 transition group cursor-pointer"
+      >
+        <div className="flex items-center space-x-3">
+          <div className="w-9 h-9 rounded-xl bg-slate-800 text-cyan-400 flex items-center justify-center border border-slate-700">
+            <Laptop className="w-5 h-5" />
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+              <span>Open Teacher Laptop Console</span>
+              <ExternalLink className="w-3 h-3 text-cyan-400 opacity-80" />
+            </h4>
+            <p className="text-[10px] text-slate-400">
+              Display live classroom QR codes and view real-time capture roster
+            </p>
+          </div>
+        </div>
+        <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-white transition" />
+      </a>
+
+      {/* 5. Assigned Classes with "Scan Class QR" Workflow (Section 5 & 7 Requirements) */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <KeyRound className="w-4 h-4 text-[#800020]" />
-            <h3 className="text-xs font-bold text-slate-900">Classroom Presence Key Generator</h3>
+            <Users className="w-4 h-4 text-[#800020]" />
+            <h3 className="text-xs font-bold text-slate-900">Today&apos;s Assigned Classes</h3>
           </div>
-          <span className="text-[10px] text-slate-400">Start &amp; Midpoint Verification</span>
+          <span className="text-[10px] text-slate-500">Scan Laptop QR to Capture Students</span>
         </div>
 
-        {/* Class Selector Strip */}
-        <div className="flex space-x-2 overflow-x-auto pb-1 no-scrollbar">
-          {classes.map((cls) => (
-            <button
-              key={cls.id}
-              onClick={() => {
-                setSelectedClass(cls);
-                setActiveKey1(cls.activePresenceKey1 || 'SC-7829');
-                setActiveKey2(cls.activePresenceKey2 || 'SC-4190');
-                loadRoster(cls.id);
-              }}
-              className={`px-3 py-2 rounded-xl border text-xs font-bold shrink-0 transition cursor-pointer ${
-                selectedClass?.id === cls.id
-                  ? 'bg-[#800020] text-white border-[#800020] shadow-sm'
-                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
-              }`}
-            >
-              <div>{cls.courseCode}</div>
-              <div className="text-[10px] font-normal opacity-85 truncate max-w-[130px]">{cls.courseName}</div>
-            </button>
-          ))}
-        </div>
+        <div className="space-y-3">
+          {classes.map((cls) => {
+            const isSelected = selectedClass?.id === cls.id;
 
-        {/* Selected Class Controller Card */}
-        {selectedClass && (
-          <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <span className="text-xs font-mono text-[#800020] font-bold">{selectedClass.courseCode}</span>
-                <h4 className="text-sm font-bold text-slate-900">{selectedClass.courseName}</h4>
-                <p className="text-xs text-slate-500">{selectedClass.roomNumber} · {selectedClass.startTime} - {selectedClass.endTime}</p>
+            return (
+              <div
+                key={cls.id}
+                className={`p-4 rounded-2xl bg-white border transition shadow-sm space-y-3 ${
+                  isSelected ? 'border-[#800020] ring-1 ring-[#800020]/20' : 'border-slate-200'
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div>
+                    <span className="text-[11px] font-mono font-bold text-[#800020]">
+                      {cls.courseCode}
+                    </span>
+                    <h4 className="text-xs font-bold text-slate-900 mt-0.5">{cls.courseName}</h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      {cls.roomNumber} • {cls.startTime} - {cls.endTime}
+                    </p>
+                  </div>
+
+                  <span className="px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-bold">
+                    {cls.sessionCategory}
+                  </span>
+                </div>
+
+                {/* Prominent "Scan Class QR" Action */}
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => {
+                      setSelectedClass(cls);
+                      loadRoster(cls.id);
+                    }}
+                    className="text-[11px] font-semibold text-slate-600 hover:text-slate-900"
+                  >
+                    {isSelected ? 'Viewing Roster' : 'View Roster'}
+                  </button>
+
+                  <button
+                    onClick={() => handleStartQRScan(cls)}
+                    className="px-4 py-2 rounded-xl bg-[#800020] hover:bg-[#630018] text-white text-xs font-bold shadow-md shadow-[#800020]/20 flex items-center space-x-1.5 transition cursor-pointer"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>Scan Class QR</span>
+                  </button>
+                </div>
               </div>
+            );
+          })}
+        </div>
+      </div>
 
-              <span className="px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-bold">
-                {selectedClass.sessionCategory}
+      {/* 6. Class Roster View */}
+      {selectedClass && (
+        <div className="p-4 rounded-2xl bg-white border border-slate-200 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-xs font-bold text-slate-900">Enrolled Students Roster</h3>
+              <p className="text-[10px] text-slate-500">{selectedClass.courseName}</p>
+            </div>
+            <div className="text-right">
+              <span className="text-xs font-mono font-bold text-emerald-700">
+                {rosterStats.present} / {rosterStats.total} Present
               </span>
             </div>
+          </div>
 
-            {/* Checkpoint 1 & 2 Presence Keys Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
-              {/* Checkpoint 1: Start of class key */}
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-slate-800">1. Start-of-Class Key</span>
-                  {key1Remaining > 0 ? (
-                    <span className="text-[10px] text-emerald-600 font-mono font-bold flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                      <Clock className="w-3 h-3 animate-spin" /> {formatCountdown(key1Remaining)}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-rose-600 font-bold bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
-                      EXPIRED
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between bg-white border border-slate-300 rounded-lg p-2.5">
-                  <span className={`font-mono text-base font-black tracking-widest ${key1Remaining > 0 ? 'text-[#800020]' : 'text-slate-400 line-through'}`}>
-                    {activeKey1 || 'None Active'}
-                  </span>
-                  <span title="Display QR Code" className="cursor-pointer">
-                    <QrCode className="w-5 h-5 text-slate-500" />
-                  </span>
-                </div>
-
-                <button
-                  onClick={() => handleGenerateKey('checkpoint_1')}
-                  disabled={generatingKey}
-                  className="w-full py-1.5 rounded-lg bg-[#800020] hover:bg-[#630018] text-white text-xs font-bold transition cursor-pointer shadow-xs disabled:opacity-50"
+          {loadingRoster ? (
+            <div className="py-6 text-center text-xs text-slate-400">Loading roster...</div>
+          ) : (
+            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+              {roster.map((stu) => (
+                <div
+                  key={stu.userId}
+                  className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs"
                 >
-                  {key1Remaining > 0 ? 'Regenerate Start Key (5m)' : 'Generate New 5-Min Key'}
-                </button>
-              </div>
-
-              {/* Checkpoint 2: Mid-class key */}
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-slate-800">2. Mid-Class Key</span>
-                  {key2Remaining > 0 ? (
-                    <span className="text-[10px] text-emerald-600 font-mono font-bold flex items-center gap-1 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                      <Clock className="w-3 h-3 animate-spin" /> {formatCountdown(key2Remaining)}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-rose-600 font-bold bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
-                      EXPIRED
-                    </span>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between bg-white border border-slate-300 rounded-lg p-2.5">
-                  <span className={`font-mono text-base font-black tracking-widest ${key2Remaining > 0 ? 'text-emerald-700' : 'text-slate-400 line-through'}`}>
-                    {activeKey2 || 'Not Generated'}
-                  </span>
-                  <span title="Display QR Code" className="cursor-pointer">
-                    <QrCode className="w-5 h-5 text-slate-500" />
-                  </span>
-                </div>
-
-                <button
-                  onClick={() => handleGenerateKey('checkpoint_2')}
-                  disabled={generatingKey}
-                  className="w-full py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition cursor-pointer shadow-xs disabled:opacity-50"
-                >
-                  {key2Remaining > 0 ? 'Regenerate Midpoint Key (5m)' : 'Activate Midpoint Key (5m)'}
-                </button>
-              </div>
-            </div>
-
-            {/* Live Student Roster Summary */}
-            <div className="pt-2 border-t border-slate-100 space-y-2">
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5 text-slate-500" /> Live Classroom Roster
-                </span>
-                <span className="font-semibold text-slate-600">
-                  <strong className="text-emerald-600">{rosterStats.present}</strong> Present / <strong className="text-rose-500">{rosterStats.absent}</strong> Absent
-                </span>
-              </div>
-
-              <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden text-xs">
-                {roster.map((stu) => (
-                  <div key={stu.userId} className="p-2.5 flex items-center justify-between hover:bg-slate-50">
-                    <div>
-                      <div className="font-bold text-slate-800">{stu.fullName}</div>
-                      <div className="text-[10px] font-mono text-slate-400">{stu.identifierCode}</div>
+                  <div className="flex items-center space-x-2.5">
+                    <div className="w-7 h-7 rounded-lg bg-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-700 uppercase">
+                      {stu.fullName.charAt(0)}
                     </div>
-
-                    <div className="flex items-center space-x-2 text-[10px]">
-                      <span className="flex items-center gap-0.5">
-                        CP1: {stu.checkpoint1 === 'confirmed' ? (
-                          <strong className="text-emerald-600">Present</strong>
-                        ) : (
-                          <span className="text-slate-400">Absent</span>
-                        )}
-                      </span>
-                      <span>•</span>
-                      <span className="flex items-center gap-0.5">
-                        CP2: {stu.checkpoint2 === 'confirmed' ? (
-                          <strong className="text-emerald-600">Present</strong>
-                        ) : (
-                          <span className="text-slate-400">Pending</span>
-                        )}
-                      </span>
+                    <div>
+                      <div className="font-semibold text-slate-900 text-xs">{stu.fullName}</div>
+                      <div className="text-[10px] text-slate-400 font-mono">{stu.identifierCode}</div>
                     </div>
                   </div>
-                ))}
-              </div>
+
+                  <div className="flex items-center space-x-1.5">
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        stu.checkpoint1 === 'confirmed'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      CP1: {stu.checkpoint1 === 'confirmed' ? 'Done' : 'Pending'}
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        stu.checkpoint2 === 'confirmed'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-slate-200 text-slate-500'
+                      }`}
+                    >
+                      CP2: {stu.checkpoint2 === 'confirmed' ? 'Done' : 'Pending'}
+                    </span>
+                  </div>
+                </div>
+              ))}
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
+
+      {/* QR Scanner Modal (Step 1: Scans laptop QR) */}
+      <ClassQRScannerModal
+        isOpen={isQRScannerOpen}
+        onClose={() => setIsQRScannerOpen(false)}
+        onSessionVerified={handleSessionVerified}
+      />
+
+      {/* Student Face Capture Modal (Step 2: Captures students and verifies face < 0.55) */}
+      {activeSessionData && (
+        <ClassStudentCaptureModal
+          isOpen={true}
+          onClose={() => setActiveSessionData(null)}
+          sessionToken={activeSessionData.token}
+          classInfo={{
+            courseName: activeScanClass?.courseName || activeSessionData.session?.className,
+            courseCode: activeScanClass?.courseCode,
+            checkpoint: activeSessionData.checkpoint,
+          }}
+          onFinished={() => {
+            setActiveSessionData(null);
+            if (selectedClass) loadRoster(selectedClass.id);
+          }}
+        />
+      )}
     </div>
   );
 };

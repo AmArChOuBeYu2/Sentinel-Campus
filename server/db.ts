@@ -110,6 +110,34 @@ export interface AttendanceEvent {
   auditHash?: string;
 }
 
+export interface CapturedStudent {
+  id: string;
+  studentId: string;
+  studentName: string;
+  identifierCode: string;
+  capturedAt: string;
+  faceDistance: number;
+  status: 'confirmed' | 'unmatched' | 'ambiguous' | 'duplicate';
+  thumbnailUrl?: string;
+  processingTimeMs: number;
+  checkpointType: 'checkpoint_1' | 'checkpoint_2';
+}
+
+export interface QRSession {
+  id: string;
+  token: string;
+  classId: string;
+  courseCode: string;
+  courseName: string;
+  teacherId: string;
+  teacherName: string;
+  checkpointType: 'checkpoint_1' | 'checkpoint_2';
+  createdAt: string;
+  expiresAt: string;
+  isActive: boolean;
+  captures: CapturedStudent[];
+}
+
 export interface AuditLog {
   id: string;
   timestamp: string;
@@ -127,6 +155,7 @@ interface DatabaseSchema {
   campusConfig: CampusConfig;
   classes: ClassSession[];
   presenceKeys: PresenceKey[];
+  qrSessions: QRSession[];
   notices: Notice[];
   attendance: AttendanceEvent[];
   auditLogs: AuditLog[];
@@ -194,7 +223,7 @@ function getInitialSeedData(): DatabaseSchema {
         semester: 'Semester 6',
         section: 'Sec-B',
         isActive: true,
-        isEnrolled: false,
+        isEnrolled: false, // Participant 1: Student (Enrollment Required)
         createdAt: '2026-01-20T10:15:00Z',
       },
       {
@@ -206,7 +235,7 @@ function getInitialSeedData(): DatabaseSchema {
         department: 'Computer Science & Engineering',
         identifierCode: 'SC-TCH-2026-0001',
         isActive: true,
-        isEnrolled: true,
+        isEnrolled: false, // Participant 2: Teacher (Enrollment Required)
         createdAt: '2026-01-15T08:00:00Z',
       },
       {
@@ -218,8 +247,20 @@ function getInitialSeedData(): DatabaseSchema {
         department: 'Academic Administration & Lab Tech',
         identifierCode: 'SC-STA-2026-0001',
         isActive: true,
-        isEnrolled: true,
+        isEnrolled: false, // Participant 3: Staff 1 (Enrollment Required)
         createdAt: '2026-02-01T09:30:00Z',
+      },
+      {
+        id: 'usr_sta_0002',
+        email: 'vikram.singh@skit.ac.in',
+        phone: '+91 98765 33333',
+        fullName: 'Er. Vikram Singh',
+        role: 'staff',
+        department: 'Facilities & Campus IT Support',
+        identifierCode: 'SC-STA-2026-0002',
+        isActive: true,
+        isEnrolled: false, // Participant 4: Staff 2 (Enrollment Required)
+        createdAt: '2026-02-05T10:00:00Z',
       },
       {
         id: 'usr_adm_0001',
@@ -234,26 +275,8 @@ function getInitialSeedData(): DatabaseSchema {
         createdAt: '2026-01-01T00:00:00Z',
       },
     ],
-    enrollments: [
-      {
-        id: 'enr_tch_0001',
-        userId: 'usr_tch_0001',
-        descriptor: seedDescriptor,
-        consentGiven: true,
-        consentStatement: 'I give informed consent for biometric facial embedding computation for campus attendance verification.',
-        enrolledAt: '2026-02-10T11:20:00Z',
-        isActive: true,
-      },
-      {
-        id: 'enr_sta_0001',
-        userId: 'usr_sta_0001',
-        descriptor: seedDescriptor,
-        consentGiven: true,
-        consentStatement: 'I give informed consent for biometric facial embedding computation for campus attendance verification.',
-        enrolledAt: '2026-02-11T12:00:00Z',
-        isActive: true,
-      },
-    ],
+    enrollments: [],
+    qrSessions: [],
     classes: [
       {
         id: 'cls_cs501',
@@ -686,6 +709,170 @@ class Database {
     }
 
     return { valid: true };
+  }
+
+  // --- QR Sessions for Laptop & Mobile Classroom Capture ---
+  createQRSession(
+    classId: string,
+    checkpointType: 'checkpoint_1' | 'checkpoint_2',
+    teacherId: string
+  ): QRSession {
+    if (!this.data.qrSessions) {
+      this.data.qrSessions = [];
+    }
+    // Invalidate existing active session for this class & checkpoint
+    this.data.qrSessions.forEach((s) => {
+      if (s.classId === classId && s.checkpointType === checkpointType) {
+        s.isActive = false;
+      }
+    });
+
+    const cls = this.getClassById(classId);
+    const teacher = this.getUserById(teacherId);
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 5 * 60 * 1000).toISOString(); // 5 min countdown
+    const token = crypto.randomBytes(16).toString('hex');
+
+    const qrSession: QRSession = {
+      id: `qrs_${crypto.randomUUID().slice(0, 8)}`,
+      token,
+      classId,
+      courseCode: cls?.courseCode || 'CS-501',
+      courseName: cls?.courseName || 'Class Session',
+      teacherId,
+      teacherName: teacher?.fullName || 'Instructor',
+      checkpointType,
+      createdAt: now.toISOString(),
+      expiresAt,
+      isActive: true,
+      captures: [],
+    };
+
+    this.data.qrSessions.unshift(qrSession);
+    this.addAuditLog(teacherId, 'QR_SESSION_CREATED', 'SUCCESS', {
+      sessionId: qrSession.id,
+      classId,
+      checkpointType,
+      token,
+      expiresAt,
+    });
+    this.save(this.data);
+    return qrSession;
+  }
+
+  getQRSessionByToken(token: string): QRSession | undefined {
+    if (!this.data.qrSessions) this.data.qrSessions = [];
+    const session = this.data.qrSessions.find((s) => s.token === token);
+    if (!session) return undefined;
+    if (session.isActive && new Date().toISOString() > session.expiresAt) {
+      session.isActive = false;
+      this.save(this.data);
+    }
+    return session;
+  }
+
+  getActiveQRSession(
+    classId: string,
+    checkpointType: 'checkpoint_1' | 'checkpoint_2'
+  ): QRSession | undefined {
+    if (!this.data.qrSessions) this.data.qrSessions = [];
+    const now = new Date().toISOString();
+    return this.data.qrSessions.find(
+      (s) =>
+        s.classId === classId &&
+        s.checkpointType === checkpointType &&
+        s.isActive &&
+        s.expiresAt > now
+    );
+  }
+
+  addStudentCaptureToSession(
+    token: string,
+    capture: Omit<CapturedStudent, 'id'>
+  ): { success: boolean; capture?: CapturedStudent; reason?: string } {
+    const session = this.getQRSessionByToken(token);
+    if (!session || !session.isActive) {
+      return { success: false, reason: 'QR capture session is expired or inactive.' };
+    }
+
+    const capturedStudent: CapturedStudent = {
+      id: `cap_${crypto.randomUUID().slice(0, 8)}`,
+      ...capture,
+    };
+
+    session.captures.unshift(capturedStudent);
+    this.save(this.data);
+    return { success: true, capture: capturedStudent };
+  }
+
+  closeQRSession(token: string, teacherId?: string): QRSession | undefined {
+    const session = this.getQRSessionByToken(token);
+    if (session) {
+      session.isActive = false;
+      this.addAuditLog(teacherId || session.teacherId, 'QR_SESSION_CLOSED', 'SUCCESS', {
+        sessionId: session.id,
+        classId: session.classId,
+        capturedCount: session.captures.length,
+      });
+      this.save(this.data);
+    }
+    return session;
+  }
+
+  // Multi-student facial recognition match against enrolled reference profiles
+  matchStudentFace(descriptor: number[]): {
+    match: UserProfile | null;
+    distance: number;
+    status: 'confirmed' | 'unmatched' | 'ambiguous';
+    confidence: number;
+  } {
+    const enrolledStudents = this.data.users.filter((u) => u.role === 'student');
+    const matches: Array<{ user: UserProfile; distance: number }> = [];
+
+    for (const student of enrolledStudents) {
+      const enrollment = this.getEnrollmentByUserId(student.id);
+      if (enrollment && enrollment.isActive && enrollment.descriptor) {
+        const dist = calculateEuclideanDistance(descriptor, enrollment.descriptor);
+        matches.push({ user: student, distance: dist });
+      }
+    }
+
+    if (matches.length === 0) {
+      return { match: null, distance: 1.0, status: 'unmatched', confidence: 0 };
+    }
+
+    matches.sort((a, b) => a.distance - b.distance);
+    const best = matches[0];
+    const threshold = 0.55;
+
+    if (best.distance > threshold) {
+      return {
+        match: null,
+        distance: Number(best.distance.toFixed(4)),
+        status: 'unmatched',
+        confidence: Math.max(0, Math.round((1 - best.distance) * 100)),
+      };
+    }
+
+    // Check for ambiguity (if second best match is within 0.05 of the best match)
+    if (matches.length > 1 && matches[1].distance < threshold) {
+      const diff = matches[1].distance - best.distance;
+      if (diff < 0.05) {
+        return {
+          match: best.user,
+          distance: Number(best.distance.toFixed(4)),
+          status: 'ambiguous',
+          confidence: Math.round((1 - best.distance) * 100),
+        };
+      }
+    }
+
+    return {
+      match: best.user,
+      distance: Number(best.distance.toFixed(4)),
+      status: 'confirmed',
+      confidence: Math.round((1 - best.distance) * 100),
+    };
   }
 
   // --- Notices ---
