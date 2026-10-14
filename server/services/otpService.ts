@@ -95,11 +95,40 @@ class EmailOtpService {
     return (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
   }
 
+  /**
+   * Normalizes an email address: strips display-name wrapper (e.g. "Name <email@domain>" -> "email@domain")
+   * and returns a trimmed, lowercase bare addr-spec.
+   */
+  normalizeEmail(rawEmail: string): string {
+    if (!rawEmail) return '';
+    const match = rawEmail.match(/<([^>]+)>/);
+    const emailOnly = match ? match[1] : rawEmail;
+    return emailOnly.trim().toLowerCase();
+  }
+
+  /**
+   * Distinguishes permanent recipient/client errors from transient network/service errors.
+   */
+  isTransientError(status?: number, errorCode?: string): boolean {
+    // Permanent errors: 401 Unauthorized, 403 Forbidden, 422 Unprocessable Entity
+    if (status === 401 || status === 403 || status === 422) return false;
+    // Transient errors: 429 Rate Limit, 500-504 Server Error
+    if (status === 429 || (status !== undefined && status >= 500 && status <= 504)) return true;
+    if (
+      errorCode &&
+      ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'rate_limit_exceeded'].includes(errorCode)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   private getResend(): Resend | null {
-    const apiKey = process.env.RESEND_API_KEY;
-    if (apiKey && apiKey.trim()) {
+    const rawKey = process.env.RESEND_API_KEY;
+    const apiKey = rawKey ? rawKey.trim() : '';
+    if (apiKey) {
       if (!this.resendClient) {
-        this.resendClient = new Resend(apiKey.trim());
+        this.resendClient = new Resend(apiKey);
       }
       return this.resendClient;
     }
@@ -269,7 +298,7 @@ If you did not request this passcode, please contact campus security immediately
     targetEmail: string,
     requestedRole: UserRole
   ): Promise<RequestOtpResult> {
-    const normalizedEmail = targetEmail.trim().toLowerCase();
+    const normalizedEmail = this.normalizeEmail(targetEmail);
 
     // 1. Rate Limiting Check on email
     const rateCheck = this.checkRateLimit(normalizedEmail);
@@ -289,8 +318,8 @@ If you did not request this passcode, please contact campus security immediately
     // Also verify that targetEmail matches user's registered primary or secondary email
     const emailMatchesUser =
       user &&
-      (user.email.toLowerCase() === normalizedEmail ||
-        user.secondaryEmail?.toLowerCase() === normalizedEmail);
+      (this.normalizeEmail(user.email) === normalizedEmail ||
+        (user.secondaryEmail ? this.normalizeEmail(user.secondaryEmail) === normalizedEmail : false));
 
     if (!user || !emailMatchesUser || (user.role !== requestedRole && user.role !== 'admin')) {
       // Perform dummy hashing so execution time matches real user path
@@ -325,99 +354,96 @@ If you did not request this passcode, please contact campus security immediately
 
     // 5. Send via Resend Email SDK
     const resend = this.getResend();
-    // Requirement 5: Simulated OTP enabled ONLY when BOTH NODE_ENV !== 'production' AND ALLOW_SIMULATED_OTP === 'true'
+    // Simulated OTP enabled ONLY when BOTH NODE_ENV !== 'production' AND ALLOW_SIMULATED_OTP === 'true'
     const allowSimulated =
       process.env.NODE_ENV !== 'production' && process.env.ALLOW_SIMULATED_OTP === 'true';
 
     if (resend) {
-      try {
-        const sender = this.getSenderEmail();
-        const sendResult = await resend.emails.send({
-          from: sender,
-          to: normalizedEmail,
-          subject: '[Sentinel Campus] Your Verification Passcode',
-          html: this.createEmailHtml(plainOtp, user.fullName, requestedRole),
-          text: this.createEmailText(plainOtp, user.fullName, requestedRole),
-        });
+      const sender = this.getSenderEmail();
+      const bareRecipient = this.normalizeEmail(normalizedEmail);
+      const emailPayload = {
+        from: sender,
+        to: bareRecipient,
+        subject: '[Sentinel Campus] Your Verification Passcode',
+        html: this.createEmailHtml(plainOtp, user.fullName, requestedRole),
+        text: this.createEmailText(plainOtp, user.fullName, requestedRole),
+      };
 
-        if (sendResult.error) {
-          // Log sanitized error (no API key or OTP) (Requirement 6)
-          console.warn('[Resend] API dispatch error:', {
+      let sendResult: any = null;
+      let lastError: any = null;
+      const MAX_ATTEMPTS = 2;
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          sendResult = await resend.emails.send(emailPayload);
+          if (!sendResult.error) {
+            lastError = null;
+            break;
+          }
+
+          const statusCode = (sendResult.error as any).statusCode || (sendResult.error as any).status;
+          const errorCode = (sendResult.error as any).name || (sendResult.error as any).code;
+
+          console.warn(`[Resend] API dispatch error (attempt ${attempt}/${MAX_ATTEMPTS}):`, {
             name: sendResult.error.name,
-            statusCode: (sendResult.error as any).statusCode,
+            statusCode,
             message: sendResult.error.message,
           });
 
-          // Requirement 7: When email dispatch fails, invalidate the associated OTP challenge
-          this.otpStore.delete(storeKey);
+          lastError = sendResult.error;
 
-          if (allowSimulated) {
-            // Re-store challenge for simulated verification in explicit dev mode
-            this.otpStore.set(storeKey, {
-              email: normalizedEmail,
-              userId: user.id,
-              role: requestedRole,
-              otpHash,
-              salt,
-              expiresAt: now + this.OTP_EXPIRY_MS,
-              attemptsRemaining: this.MAX_VERIFICATION_ATTEMPTS,
-              createdAt: now,
-            });
-            return {
-              success: true,
-              message: `[DEMO MODE - Resend Restricted] Passcode dispatched: ${plainOtp}`,
-              isSimulated: true,
-              simulatedOtp: plainOtp,
-            };
+          // If not transient, do not retry
+          if (!this.isTransientError(statusCode, errorCode)) {
+            break;
           }
 
-          return {
-            success: false,
-            error: `Failed to deliver authentication email: ${sendResult.error.message}`,
-            status: (sendResult.error as any).statusCode || 502,
-          };
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+          }
+        } catch (err: unknown) {
+          const e = err as any;
+          console.warn(`[Resend] Dispatch network exception (attempt ${attempt}/${MAX_ATTEMPTS}):`, e?.message || e);
+          lastError = e;
+          const statusCode = e?.statusCode || e?.status;
+          const errorCode = e?.code || e?.name;
+
+          if (!this.isTransientError(statusCode, errorCode)) {
+            break;
+          }
+
+          if (attempt < MAX_ATTEMPTS) {
+            await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+          }
         }
+      }
 
-        // Successfully delivered via Resend (Requirement 6: Record message ID)
-        const messageId = sendResult.data?.id;
-        return {
-          success: true,
-          message: `Verification passcode dispatched to ${normalizedEmail}. Please check your inbox.`,
-          messageId,
-          isSimulated: false,
-        };
-      } catch (err: unknown) {
-        const e = err as Error;
-        console.error('[Resend] Dispatch exception:', e.message);
-
-        // Invalidate challenge on error
+      if (lastError || !sendResult || sendResult.error) {
+        // Invalidate challenge immediately on email delivery failure
         this.otpStore.delete(storeKey);
 
-        if (allowSimulated) {
-          this.otpStore.set(storeKey, {
-            email: normalizedEmail,
-            userId: user.id,
-            role: requestedRole,
-            otpHash,
-            salt,
-            expiresAt: now + this.OTP_EXPIRY_MS,
-            attemptsRemaining: this.MAX_VERIFICATION_ATTEMPTS,
-            createdAt: now,
-          });
-          return {
-            success: true,
-            message: `[DEMO MODE - Mail Exception] Passcode: ${plainOtp}`,
-            isSimulated: true,
-            simulatedOtp: plainOtp,
-          };
+        const errorObj = sendResult?.error || lastError;
+        const statusCode = (errorObj as any)?.statusCode || (errorObj as any)?.status || 502;
+        let errorMessage = errorObj?.message || 'Failed to deliver authentication email.';
+
+        if (statusCode === 403 && sender.includes('onboarding@resend.dev')) {
+          errorMessage = `Delivery rejected by Resend (403 Forbidden): The sandbox sender '${sender}' can only deliver to the verified account owner. Institutional delivery requires domain verification at resend.com/domains.`;
         }
 
         return {
           success: false,
-          error: 'Email delivery service temporarily unavailable. Please retry in a few moments.',
-          status: 503,
+          error: errorMessage,
+          status: statusCode,
         };
       }
+
+      // Successfully delivered via Resend
+      const messageId = sendResult.data?.id;
+      return {
+        success: true,
+        message: `Verification passcode dispatched to ${bareRecipient}. Please check your inbox.`,
+        messageId,
+        isSimulated: false,
+      };
     }
 
     // If Resend API key is not configured:

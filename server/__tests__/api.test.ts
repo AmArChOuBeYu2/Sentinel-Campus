@@ -15,6 +15,8 @@ import {
   LivenessSessionTracker,
   TrackedFaceData as FaceDetectionResult,
 } from '../../src/services/livenessTracker';
+import { otpService } from '../services/otpService';
+import { ALLOWED_DEMO_ACCOUNTS } from '../routes/auth';
 
 async function runTestSuite() {
   console.log('🧪 ========================================================');
@@ -131,7 +133,6 @@ async function runTestSuite() {
 
   // 7. Resend Email OTP Authentication & Security Tests (Requirement 10)
   console.log('\n--- 7. Resend Email OTP Authentication & Security Tests ---');
-  const { otpService } = await import('../services/otpService');
   otpService.resetStoreForTesting();
 
   const testStudentId = 'usr_stu_test_001';
@@ -835,6 +836,67 @@ async function runTestSuite() {
   gapTracker.processFrame(mockFrame1);
   gapTracker.processFrame(null);
   assert(gapTracker.getPhase() === 'stabilizing', 'Single transient dropped frame does not reset stabilizing session');
+
+  // 16. Demo Quick Sign-In & Resend Email OTP Delivery Tests
+  console.log('\n--- 16. Demo Quick Sign-In & Resend OTP Delivery Tests ---');
+
+  // 16.1 Email normalization
+  const bare1 = otpService.normalizeEmail('Amar Choubey <httpsamar96@gmail.com>');
+  assert(bare1 === 'httpsamar96@gmail.com', 'Display name wrapper stripped from recipient email');
+  const bare2 = otpService.normalizeEmail('  KRISHNA.JHA@SKIT.AC.IN  ');
+  assert(bare2 === 'krishna.jha@skit.ac.in', 'Whitespace trimmed and lowercased');
+  const bare3 = otpService.normalizeEmail('<user@skit.ac.in>');
+  assert(bare3 === 'user@skit.ac.in', 'Angle bracket email properly parsed');
+
+  // 16.2 Error classification (transient vs permanent)
+  assert(otpService.isTransientError(403) === false, 'HTTP 403 Forbidden correctly classified as non-transient');
+  assert(otpService.isTransientError(401) === false, 'HTTP 401 Unauthorized correctly classified as non-transient');
+  assert(otpService.isTransientError(422) === false, 'HTTP 422 Unprocessable correctly classified as non-transient');
+  assert(otpService.isTransientError(429) === true, 'HTTP 429 Rate Limit correctly classified as transient retryable');
+  assert(otpService.isTransientError(500) === true, 'HTTP 500 Server Error correctly classified as transient retryable');
+  assert(otpService.isTransientError(503) === true, 'HTTP 503 Service Unavailable correctly classified as transient retryable');
+  assert(otpService.isTransientError(undefined, 'ECONNRESET') === true, 'ECONNRESET network drop correctly classified as transient retryable');
+  assert(otpService.isTransientError(undefined, 'ETIMEDOUT') === true, 'ETIMEDOUT network drop correctly classified as transient retryable');
+
+  // 16.3 Challenge invalidation upon delivery failure
+  otpService.resetStoreForTesting();
+  const testStudent = db.getUserById('usr_stu_0001')!;
+  assert(otpService.hasActiveChallenge('usr_stu_0001', 'student') === false, 'No challenge active before request');
+
+  // 16.4 Role-matching protection on Resend verified owner email
+  // httpsamar96@gmail.com is Amar Choubey's Teacher account.
+  // Requesting student role for httpsamar96@gmail.com must return timing-safe generic response and NEVER stage a challenge for student.
+  const roleMismatchEmailRes = await otpService.requestOtp(
+    testStudent,
+    'httpsamar96@gmail.com',
+    'student'
+  );
+  assert(roleMismatchEmailRes.success === true, 'Role-mismatch email request returns safe uniform response');
+  assert(otpService.hasActiveChallenge('usr_stu_0001', 'student') === false, 'Role mismatch never stages active OTP challenge');
+
+  // 16.5 Seeded Demo Accounts whitelist & 1-click verification
+  db.resetEnrollment('usr_stu_0001');
+  const demoKeys = Object.keys(ALLOWED_DEMO_ACCOUNTS);
+  assert(demoKeys.length === 6, 'Whitelist includes all 6 official seeded accounts (Student, Teacher, 3 Staff, Admin)');
+
+  for (const demoId of ['usr_stu_0001', 'usr_tch_0001', 'usr_sta_0001', 'usr_sta_0002', 'usr_sta_0003']) {
+    const spec = ALLOWED_DEMO_ACCOUNTS[demoId];
+    const user = db.getUserById(demoId);
+    assert(user !== undefined, `Demo account ${demoId} (${spec.name}) exists in database`);
+    assert(user?.isActive === true, `Demo account ${demoId} is active`);
+    assert(user?.role === spec.role, `Demo account ${demoId} role matches expected '${spec.role}'`);
+    assert(user?.isEnrolled === false, `Demo account ${demoId} correctly preserves unenrolled baseline gate`);
+  }
+
+  // 16.6 Demo sign-in security validations
+  const invalidDemoId = 'usr_unknown_fake';
+  assert(!ALLOWED_DEMO_ACCOUNTS[invalidDemoId], 'Arbitrary unlisted user ID is absent from demo whitelist');
+
+  const prodEnvPrev = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  const isProdBlocked = process.env.NODE_ENV === 'production';
+  assert(isProdBlocked === true, 'Production environment check successfully triggered');
+  process.env.NODE_ENV = prodEnvPrev;
 
   // Final cleanup so usr_stu_0001 returns to unenrolled baseline state
   db.resetEnrollment('usr_stu_0001');

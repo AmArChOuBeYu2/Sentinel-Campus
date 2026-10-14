@@ -120,11 +120,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  const handleQuickDemo = async (userId: string) => {
+  const handleQuickDemo = async (userId: string, role?: UserRole) => {
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await api.quickDemoLogin(userId);
+      const res = await api.quickDemoLogin(userId, role);
       if (res.success && res.user) {
         onLoginSuccess(res.user);
       }
@@ -391,7 +391,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 text-[10px]">
               <button
                 type="button"
-                onClick={() => handleQuickDemo('usr_stu_0001')}
+                onClick={() => handleQuickDemo('usr_stu_0001', 'student')}
                 className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Student</div>
@@ -400,7 +400,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
               <button
                 type="button"
-                onClick={() => handleQuickDemo('usr_tch_0001')}
+                onClick={() => handleQuickDemo('usr_tch_0001', 'teacher')}
                 className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Teacher</div>
@@ -409,7 +409,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
               <button
                 type="button"
-                onClick={() => handleQuickDemo('usr_sta_0001')}
+                onClick={() => handleQuickDemo('usr_sta_0001', 'staff')}
                 className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Staff 1</div>
@@ -418,7 +418,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
               <button
                 type="button"
-                onClick={() => handleQuickDemo('usr_sta_0002')}
+                onClick={() => handleQuickDemo('usr_sta_0002', 'staff')}
                 className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Staff 2</div>
@@ -427,7 +427,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
               <button
                 type="button"
-                onClick={() => handleQuickDemo('usr_sta_0003')}
+                onClick={() => handleQuickDemo('usr_sta_0003', 'staff')}
                 className="p-1.5 rounded-lg bg-slate-50 hover:bg-[#800020]/5 border border-slate-200 text-slate-800 hover:text-[#800020] text-left transition cursor-pointer"
               >
                 <div className="font-bold">Staff 3</div>

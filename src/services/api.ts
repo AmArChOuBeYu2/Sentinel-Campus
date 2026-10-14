@@ -98,10 +98,10 @@ class ApiService {
     return res;
   }
 
-  async quickDemoLogin(userId: string): Promise<{ success: boolean; user: UserProfile; token: string }> {
-    const res = await this.request<{ success: boolean; user: UserProfile; token: string }>('/auth/verify-otp', {
+  async quickDemoLogin(userId: string, role?: UserRole): Promise<{ success: boolean; user: UserProfile; token: string }> {
+    const res = await this.request<{ success: boolean; user: UserProfile; token: string }>('/auth/demo-login', {
       method: 'POST',
-      body: JSON.stringify({ userId, otp: '123456' }),
+      body: JSON.stringify({ userId, role }),
     });
     if (res.token) {
       this.setToken(res.token);
