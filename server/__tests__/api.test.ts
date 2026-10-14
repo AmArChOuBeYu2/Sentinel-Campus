@@ -286,7 +286,7 @@ async function runTestSuite() {
   console.log('\n--- 9. Campus Network Trust & Subnet Validation Tests ---');
   const { networkAuthService } = await import('../services/networkAuthService');
 
-  // 9.1 Demo Mode
+  // 9.1 Demo / Prototype Mode Explicit Labelling
   const demoReq = {
     headers: {},
     socket: { remoteAddress: '192.168.43.15' },
@@ -295,12 +295,35 @@ async function runTestSuite() {
   const demoResult = networkAuthService.validateNetwork(demoReq);
   assert(demoResult.verified === true, 'Demo mode accepts local hotspot/testing connections');
   assert(demoResult.isDemo === true, 'Demo mode flag accurately set in validation response');
+  assert(demoResult.isSimulated === true, 'Demo mode explicitly flagged as simulated (isSimulated: true)');
+  assert(demoResult.verificationTier === 'simulated_prototype', 'Demo mode assigned simulated_prototype tier');
 
-  // 9.2 Production / CIDR Fail-Closed Mode
+  // 9.2 Zero-Trust Client MAC Address Enforcement (Requirement 8)
+  const prototypeMac = 'E4:EC:E8:8C:DB:E3';
+  assert(networkAuthService.isMacSufficientForAuth() === false, 'isMacSufficientForAuth returns false (MAC cannot authorize attendance)');
+
+  const macEval = networkAuthService.evaluateMacClaim(prototypeMac);
+  assert(macEval.acceptedAsAuthFactor === false, 'Client-supplied MAC address is rejected as an authentication factor');
+  assert(macEval.reason.includes('W3C browser sandboxing and Android 10+ MAC address randomization'), 'Evaluation explains OS and browser security sandboxing reasons');
+
+  // 9.3 Client-supplied MAC address cannot bypass CIDR verification
   const origMode = process.env.NETWORK_AUTH_MODE;
   process.env.NETWORK_AUTH_MODE = 'cidr';
   process.env.TRUSTED_NETWORK_CIDRS = '192.168.1.0/24,10.0.0.0/8';
 
+  const untrustedReqWithMac = {
+    headers: {
+      'x-forwarded-for': '203.0.113.88',
+      'x-client-mac': prototypeMac,
+    },
+    socket: { remoteAddress: '203.0.113.88' },
+    body: { clientMac: prototypeMac },
+  } as any;
+  const untrustedWithMacResult = networkAuthService.validateNetwork(untrustedReqWithMac, { clientMac: prototypeMac });
+  assert(untrustedWithMacResult.verified === false, 'Client presenting prototype MAC E4:EC:E8:8C:DB:E3 from external IP is strictly rejected');
+  assert(untrustedWithMacResult.macNotice?.includes('strictly disregarded as authentication evidence') === true, 'Server security audit logs that MAC was disregarded');
+
+  // 9.4 Trusted campus CIDR verification
   const trustedReq = {
     headers: { 'x-forwarded-for': '192.168.1.55' },
     socket: { remoteAddress: '192.168.1.55' },
@@ -308,16 +331,26 @@ async function runTestSuite() {
   const trustedResult = networkAuthService.validateNetwork(trustedReq);
   assert(trustedResult.verified === true, 'CIDR mode accepts IP within trusted campus subnet 192.168.1.0/24');
   assert(trustedResult.matchedCidr === '192.168.1.0/24', 'Matched CIDR properly returned');
+  assert(trustedResult.verificationTier === 'server_verified_infrastructure', 'CIDR mode assigned server_verified_infrastructure tier');
 
-  const untrustedReq = {
-    headers: { 'x-forwarded-for': '203.0.113.88' },
-    socket: { remoteAddress: '203.0.113.88' },
+  // 9.5 Demo mode cannot authorize production attendance (Fail-closed)
+  const origNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  process.env.NETWORK_AUTH_MODE = 'demo';
+  const prodDemoReq = {
+    headers: { 'x-forwarded-for': '192.168.43.15' },
+    socket: { remoteAddress: '192.168.43.15' },
   } as any;
-  const untrustedResult = networkAuthService.validateNetwork(untrustedReq);
-  assert(untrustedResult.verified === false, 'CIDR mode fails closed and rejects external IP 203.0.113.88');
-  assert(untrustedResult.error?.includes('not connected to an authorized campus Wi-Fi') === true, 'Helpful error message returned for untrusted network');
+  const prodDemoResult = networkAuthService.validateNetwork(prodDemoReq);
+  assert(prodDemoResult.verified === false, 'Demo/simulated mode fails closed in production (cannot authorize production attendance)');
+  assert(prodDemoResult.error?.includes('prohibited in production') === true, 'Clear fail-closed error returned');
 
-  // Restore network mode
+  // Restore environment variables
+  if (origNodeEnv !== undefined) {
+    process.env.NODE_ENV = origNodeEnv;
+  } else {
+    delete process.env.NODE_ENV;
+  }
   if (origMode !== undefined) {
     process.env.NETWORK_AUTH_MODE = origMode;
   } else {

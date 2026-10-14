@@ -49,6 +49,8 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
     verified: boolean;
     mode: string;
     isDemo: boolean;
+    isSimulated?: boolean;
+    verificationTier?: 'simulated_prototype' | 'server_verified_infrastructure';
     message: string;
     error?: string;
   } | null>(null);
@@ -305,9 +307,30 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
           {/* Network Trust Indicator */}
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-slate-700/60 text-slate-300 border border-slate-600/50">
             <Wifi className={`w-3.5 h-3.5 ${networkInfo?.verified ? 'text-emerald-400' : 'text-amber-400'}`} />
-            <span>{networkInfo?.isDemo ? 'Demo Wi-Fi' : networkInfo?.verified ? 'Campus Subnet' : 'Checking'}</span>
+            <span>
+              {networkInfo?.isDemo || networkInfo?.isSimulated
+                ? 'Simulated Network (Prototype Demo)'
+                : networkInfo?.verified
+                ? 'Campus Subnet (Verified)'
+                : 'Verifying Network'}
+            </span>
           </div>
         </div>
+
+        {/* Prototype Network Notice */}
+        {(networkInfo?.isDemo || networkInfo?.isSimulated) && (
+          <div className="px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-2.5 text-xs text-amber-200/90">
+            <Wifi className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold text-amber-300 block text-[11px] uppercase tracking-wider">
+                Prototype Mode: Simulated Network Check
+              </span>
+              <p className="text-[11px] text-amber-200/80 mt-0.5 leading-snug">
+                Local testing / phone hotspot connection active. In production deployment, server-verified connection to SKIT authorized subnets or IT gateway challenge is enforced.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* State 1: Attendance Already Recorded / Verification Successful */}
         {state === 'attendance_recorded' && (

@@ -136,9 +136,12 @@ export interface GateStatusResponse {
     verified: boolean;
     mode: string;
     isDemo: boolean;
+    isSimulated?: boolean;
+    verificationTier?: 'simulated_prototype' | 'server_verified_infrastructure';
     message: string;
     error?: string;
     clientIp?: string;
+    macNotice?: string;
   };
   message?: string;
 }
