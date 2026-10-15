@@ -25,12 +25,13 @@ import { UserProfile, CampusConfig, AttendanceEvent, ClassSession } from './type
 import { api } from './services/api';
 import { geofenceService, GeolocationMode, DEFAULT_SKIT_COORDS } from './services/geofence';
 import { offlineSyncService } from './services/offlineSync';
-import { ShieldCheck, RefreshCw } from 'lucide-react';
+import { ShieldCheck, RefreshCw, AlertCircle } from 'lucide-react';
 
 function AppContent() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [gateUnlocked, setGateUnlocked] = useState<boolean>(false);
+  const [isDemoPreview, setIsDemoPreview] = useState<boolean>(() => api.getDemoPreview());
   const [campus, setCampus] = useState<CampusConfig>({
     campusName: DEFAULT_SKIT_COORDS.campusName,
     campusCode: 'SKIT-JAI-2026',
@@ -127,6 +128,8 @@ function AppContent() {
 
   const handleLogout = () => {
     api.setToken(null);
+    api.setDemoPreview(false);
+    setIsDemoPreview(false);
     setUser(null);
     setGateUnlocked(false);
     navigate('/login');
@@ -137,6 +140,8 @@ function AppContent() {
   };
 
   const handleSelectUser = async (userId: string) => {
+    api.setDemoPreview(false);
+    setIsDemoPreview(false);
     const res = await api.quickDemoLogin(userId);
     if (res.success && res.user) {
       setUser(res.user);
@@ -180,6 +185,25 @@ function AppContent() {
         />
       )}
 
+      {/* Demo Preview Banner: Displayed when read-only dashboard preview is active */}
+      {isDemoPreview && (
+        <div className="bg-amber-500 text-slate-950 font-bold px-4 py-2.5 text-xs text-center tracking-wider uppercase shadow-md flex items-center justify-center gap-2 border-b border-amber-600">
+          <AlertCircle className="w-4 h-4 text-slate-950 flex-shrink-0" />
+          <span>DEMO PREVIEW — IDENTITY NOT VERIFIED (READ-ONLY)</span>
+          <button
+            type="button"
+            onClick={() => {
+              api.setDemoPreview(false);
+              setIsDemoPreview(false);
+              navigate('/verify-presence');
+            }}
+            className="ml-4 px-2 py-0.5 rounded bg-black/20 hover:bg-black/30 text-slate-950 text-[10px] uppercase font-bold transition-all"
+          >
+            Exit Preview
+          </button>
+        </div>
+      )}
+
       <Routes>
         {/* Route 1: Public Login (/login) - Dedicated card selection for Student, Teacher, Staff only */}
         <Route
@@ -188,7 +212,7 @@ function AppContent() {
             user ? (
               user.role === 'admin' ? (
                 <Navigate to="/admin" replace />
-              ) : gateUnlocked ? (
+              ) : gateUnlocked || isDemoPreview ? (
                 <Navigate to="/" replace />
               ) : (
                 <Navigate to="/verify-presence" replace />
@@ -219,7 +243,7 @@ function AppContent() {
               <Navigate to="/login" replace />
             ) : user.role === 'admin' ? (
               <Navigate to="/admin" replace />
-            ) : gateUnlocked ? (
+            ) : gateUnlocked || isDemoPreview ? (
               <Navigate to="/" replace />
             ) : (
               <MandatoryAttendanceScreen
@@ -231,6 +255,11 @@ function AppContent() {
                 }}
                 onLogout={handleLogout}
                 onOpenEnrollmentModal={() => setIsEnrollmentOpen(true)}
+                onEnableDemoPreview={() => {
+                  api.setDemoPreview(true);
+                  setIsDemoPreview(true);
+                  navigate('/');
+                }}
               />
             )
           }
@@ -293,7 +322,7 @@ function AppContent() {
               <LandingPage />
             ) : user.role === 'admin' ? (
               <Navigate to="/admin" replace />
-            ) : !gateUnlocked ? (
+            ) : !gateUnlocked && !isDemoPreview ? (
               <Navigate to="/verify-presence" replace />
             ) : (
               <div className="flex flex-col min-h-screen">

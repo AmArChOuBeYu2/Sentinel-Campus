@@ -7,6 +7,14 @@ const router = Router();
 
 // POST /api/enrollment
 router.post('/', (req: Request, res: Response) => {
+  if (req.headers['x-demo-preview'] === 'true') {
+    return res.status(403).json({
+      success: false,
+      code: 'DEMO_PREVIEW_READ_ONLY',
+      error: 'Action forbidden: Demo preview mode is strictly read-only and cannot approve biometric enrollment.',
+    });
+  }
+
   const currentUser = getAuthenticatedUser(req);
   if (!currentUser) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });

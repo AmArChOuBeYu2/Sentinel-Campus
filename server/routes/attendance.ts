@@ -260,6 +260,14 @@ router.post('/verify', (req: Request, res: Response) => {
 
 // POST /api/attendance/submit
 router.post('/submit', (req: Request, res: Response) => {
+  if (req.headers['x-demo-preview'] === 'true') {
+    return res.status(403).json({
+      success: false,
+      code: 'DEMO_PREVIEW_READ_ONLY',
+      error: 'Action forbidden: Demo preview mode is strictly read-only and cannot record attendance.',
+    });
+  }
+
   const user = getAuthenticatedUser(req);
   if (!user) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -396,6 +404,14 @@ router.get('/me', (req: Request, res: Response) => {
 
 // POST /api/attendance/sync (Offline queue batch synchronization)
 router.post('/sync', (req: Request, res: Response) => {
+  if (req.headers['x-demo-preview'] === 'true') {
+    return res.status(403).json({
+      success: false,
+      code: 'DEMO_PREVIEW_READ_ONLY',
+      error: 'Action forbidden: Demo preview mode is strictly read-only and cannot sync attendance.',
+    });
+  }
+
   const user = getAuthenticatedUser(req);
   if (!user) {
     return res.status(401).json({ success: false, error: 'Unauthorized' });
@@ -564,6 +580,9 @@ router.get('/gate-status', (req: Request, res: Response) => {
   const todayRecord = db.getTodayPersonalAttendance(user.id);
   const todayAttendanceConfirmed = !!todayRecord;
   const networkStatus = networkAuthService.validateNetwork(req);
+  const demoPreviewAllowed =
+    process.env.NODE_ENV !== 'production' &&
+    process.env.ENABLE_DEMO_DASHBOARD_PREVIEW === 'true';
 
   return res.json({
     success: true,
@@ -576,11 +595,20 @@ router.get('/gate-status', (req: Request, res: Response) => {
     todayAttendanceConfirmed,
     todayRecord: todayRecord || null,
     networkStatus,
+    demoPreviewAllowed,
   });
 });
 
 // POST /api/attendance/verify-personal-attendance - Mandatory Face & Network Attendance Flow
 router.post('/verify-personal-attendance', (req: Request, res: Response) => {
+  if (req.headers['x-demo-preview'] === 'true') {
+    return res.status(403).json({
+      success: false,
+      code: 'DEMO_PREVIEW_READ_ONLY',
+      error: 'Action forbidden: Demo preview mode is strictly read-only and cannot verify biometric identity or record personal attendance.',
+    });
+  }
+
   const user = getAuthenticatedUser(req);
   if (!user) {
     return res.status(401).json({ success: false, error: 'Unauthorized. Authentication session required.' });
@@ -592,6 +620,22 @@ router.post('/verify-personal-attendance', (req: Request, res: Response) => {
       success: true,
       unlocked: true,
       message: 'Admin accounts are exempt from daily personal attendance gate.',
+    });
+  }
+
+  // Production Fail-Closed Policy:
+  const isProductionBiometricEnforced =
+    process.env.NODE_ENV === 'production' || process.env.REQUIRE_SERVER_BIOMETRICS === 'true';
+
+  if (isProductionBiometricEnforced) {
+    db.addAuditLog(user.id, 'BIOMETRIC_FAIL_CLOSED_PRODUCTION', 'WARNING', {
+      targetUserId: user.id,
+      message: 'Client-supplied descriptor rejected under production biometric security policy for attendance gate',
+    });
+    return res.status(503).json({
+      success: false,
+      code: 'SERVER_BIOMETRIC_RUNTIME_UNAVAILABLE',
+      error: 'Production security policy: Server-side facial landmark inference runtime is required in production. Client-supplied descriptors cannot authorize production attendance gate.',
     });
   }
 

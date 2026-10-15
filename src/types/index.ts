@@ -19,6 +19,9 @@ export interface UserProfile {
   credentialStatus?: 'verified' | 'provisional_pending_configuration';
   emailVerified?: boolean;
   phoneVerified?: boolean;
+  identityVerifiedByAdmin?: boolean;
+  adminVerifiedAt?: string;
+  adminVerifiedBy?: string;
 }
 
 export interface CampusConfig {

@@ -174,7 +174,7 @@ export const EnrollmentModal: React.FC<EnrollmentModalProps> = ({
         setIsSuccess(true);
         stopCamera();
       } else {
-        setErrorMessage(res.message || 'Failed to complete biometric enrollment.');
+        setErrorMessage((res as any).error || res.message || 'Failed to complete biometric enrollment.');
       }
     } catch (err: unknown) {
       const e = err as Error;

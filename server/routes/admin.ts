@@ -154,6 +154,37 @@ router.patch('/users/:id', requireAdmin, (req: Request, res: Response) => {
   });
 });
 
+// POST /api/admin/verify-identity/:userId
+router.post('/verify-identity/:userId', requireAdmin, (req: Request, res: Response) => {
+  const adminUser = getAuthenticatedUser(req);
+  const { userId } = req.params;
+  const targetUser = db.getUserById(userId);
+  if (!targetUser) {
+    return res.status(404).json({ success: false, error: 'Target user not found.' });
+  }
+
+  const updated = db.updateUser(userId, {
+    identityVerifiedByAdmin: true,
+    adminVerifiedAt: new Date().toISOString(),
+    adminVerifiedBy: adminUser?.id || 'admin',
+  });
+
+  db.addAuditLog(adminUser?.id || 'admin', 'ADMIN_IDENTITY_VERIFIED', 'SUCCESS', {
+    targetUserId: targetUser.id,
+    targetUserName: targetUser.fullName,
+    targetUserRole: targetUser.role,
+    adminId: adminUser?.id || 'admin',
+    adminName: adminUser?.fullName || 'Administrator',
+    details: 'Administrator independently verified physical identity. Genuine live camera biometric enrollment is now authorized.',
+  });
+
+  return res.json({
+    success: true,
+    message: `Account ${targetUser.fullName} (${targetUser.id}) has been independently verified by an administrator. Genuine live camera enrollment is now enabled.`,
+    user: updated,
+  });
+});
+
 // GET /api/admin/campus
 router.get('/campus', requireAdmin, (req: Request, res: Response) => {
   return res.json({

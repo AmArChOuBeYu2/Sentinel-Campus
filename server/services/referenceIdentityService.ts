@@ -1,7 +1,6 @@
 import path from 'path';
 import fs from 'fs';
-import { db, calculateEuclideanDistance } from '../db';
-import { UserProfile } from '../types';
+import { db, calculateEuclideanDistance, UserProfile } from '../db';
 
 export interface AuthorizedReferenceProfile {
   userId: string;
@@ -85,13 +84,14 @@ export class ReferenceIdentityService {
 
     // 1. Ineligible AI-generated or uncertain reference check
     if (profile && profile.referenceStatus === 'ineligible_ai_generated') {
-      if (!options?.isAdminSession) {
+      const isVerified = targetUser.identityVerifiedByAdmin === true || options?.isAdminSession === true;
+      if (!isVerified) {
         return {
           valid: false,
           code: 'AI_REFERENCE_INELIGIBLE',
           error:
             profile.ineligibilityReason ||
-            'Reference image is AI-generated and ineligible to serve as biometric identity ground truth. Explicit administrator verification is required.',
+            'Reference image is AI-generated (Amar.png) and ineligible to serve as biometric identity ground truth. Explicit administrator verification is required before live camera enrollment.',
         };
       }
     }

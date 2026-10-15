@@ -27,6 +27,7 @@ interface MandatoryAttendanceScreenProps {
   onUnlocked: () => void;
   onLogout: () => void;
   onOpenEnrollmentModal: () => void;
+  onEnableDemoPreview?: () => void;
 }
 
 type VerificationState =
@@ -47,8 +48,10 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
   onUnlocked,
   onLogout,
   onOpenEnrollmentModal,
+  onEnableDemoPreview,
 }) => {
   const [state, setState] = useState<VerificationState>('initializing');
+  const [demoPreviewAllowed, setDemoPreviewAllowed] = useState<boolean>(false);
   const [networkInfo, setNetworkInfo] = useState<{
     verified: boolean;
     mode: string;
@@ -94,6 +97,10 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
         }
 
         if (gateRes && gateRes.success) {
+          if (gateRes.demoPreviewAllowed) {
+            setDemoPreviewAllowed(true);
+          }
+
           // Zero-Trust: An existing attendance record NEVER bypasses the live biometric gate.
           // Fresh live face verification is strictly required for every session.
           if (!gateRes.isEnrolled) {
@@ -430,6 +437,16 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
                 <Camera className="w-4 h-4" />
                 <span>Begin Genuine Live Enrollment</span>
               </button>
+
+              {demoPreviewAllowed && onEnableDemoPreview && (
+                <button
+                  type="button"
+                  onClick={onEnableDemoPreview}
+                  className="w-full py-2.5 px-4 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-semibold text-xs transition-all flex items-center justify-center gap-2"
+                >
+                  <span>Open Read-Only Demo Preview</span>
+                </button>
+              )}
 
               <button
                 onClick={() => setState('manual_review')}

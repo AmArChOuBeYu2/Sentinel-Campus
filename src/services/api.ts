@@ -15,9 +15,25 @@ const API_BASE = '/api';
 
 class ApiService {
   private token: string | null = null;
+  private isDemoPreview: boolean = typeof sessionStorage !== 'undefined' && sessionStorage.getItem('sentinel_demo_preview') === '1';
 
   constructor() {
     this.token = localStorage.getItem('sentinel_auth_token') || null;
+  }
+
+  setDemoPreview(enabled: boolean) {
+    this.isDemoPreview = enabled;
+    if (typeof sessionStorage !== 'undefined') {
+      if (enabled) {
+        sessionStorage.setItem('sentinel_demo_preview', '1');
+      } else {
+        sessionStorage.removeItem('sentinel_demo_preview');
+      }
+    }
+  }
+
+  getDemoPreview(): boolean {
+    return this.isDemoPreview;
   }
 
   setToken(token: string | null) {
@@ -42,6 +58,10 @@ class ApiService {
 
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
+    if (this.isDemoPreview) {
+      headers['x-demo-preview'] = 'true';
     }
 
     const response = await fetch(`${API_BASE}${endpoint}`, {
@@ -205,6 +225,7 @@ class ApiService {
       error?: string;
       clientIp?: string;
     };
+    demoPreviewAllowed?: boolean;
     message?: string;
   }> {
     return this.request('/attendance/gate-status');
@@ -449,6 +470,12 @@ class ApiService {
     return this.request(`/admin/users/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(updates),
+    });
+  }
+
+  async adminVerifyIdentity(userId: string): Promise<{ success: boolean; message: string; user: UserProfile }> {
+    return this.request(`/admin/verify-identity/${userId}`, {
+      method: 'POST',
     });
   }
 

@@ -276,6 +276,14 @@ function validateDescriptorIntegrity(descriptor: unknown): { valid: boolean; err
 
 // POST /api/classes/qr-session/:token/capture - Teacher captures student from mobile camera
 router.post('/qr-session/:token/capture', (req: Request, res: Response) => {
+  if (req.headers['x-demo-preview'] === 'true') {
+    return res.status(403).json({
+      success: false,
+      code: 'DEMO_PREVIEW_READ_ONLY',
+      error: 'Action forbidden: Demo preview mode is strictly read-only and cannot record classroom attendance.',
+    });
+  }
+
   const user = getAuthenticatedUser(req);
   if (!user || (user.role !== 'teacher' && user.role !== 'admin')) {
     return res.status(403).json({ success: false, error: 'Only authenticated instructors can capture student attendance.' });
