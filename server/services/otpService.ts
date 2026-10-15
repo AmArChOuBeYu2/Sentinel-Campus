@@ -483,17 +483,40 @@ If you did not request this passcode, please contact campus security immediately
       }
 
       if (lastError || !sendResult || sendResult.error) {
-        // Invalidate challenge immediately on email delivery failure
-        this.otpStore.delete(storeKey);
-        this.removeChallengeFromDb(user.id, requestedRole);
-
         const errorObj = sendResult?.error || lastError;
         const statusCode = (errorObj as any)?.statusCode || (errorObj as any)?.status || 502;
         let errorMessage = errorObj?.message || 'Failed to deliver authentication email.';
 
         if (statusCode === 403 && sender.includes('onboarding@resend.dev')) {
           errorMessage = `Delivery rejected by Resend (403 Forbidden): The sandbox sender '${sender}' can only deliver to the verified account owner. Institutional delivery requires domain verification at resend.com/domains.`;
+        } else if (
+          errorMessage === 'Unable to fetch data. The request could not be resolved.' ||
+          errorObj?.name === 'application_error'
+        ) {
+          errorMessage =
+            'Email delivery service unreachable (Unable to connect to Resend API). Please check your network connection or use local demo mode.';
         }
+
+        // In non-production environments with ALLOW_SIMULATED_OTP enabled,
+        // fall back safely to simulated OTP so local development and offline testing are not blocked by external API outages or sandbox limits.
+        if (allowSimulated) {
+          console.warn(
+            `[OTP Service] Resend dispatch failed (${errorMessage}). Falling back to simulated OTP in non-production environment.`
+          );
+          this.otpStore.set(storeKey, challengeRecord);
+          this.persistChallengeToDb(challengeRecord);
+
+          return {
+            success: true,
+            message: `[DEV FALLBACK] Passcode generated: ${plainOtp}`,
+            isSimulated: true,
+            simulatedOtp: plainOtp,
+          };
+        }
+
+        // Invalidate challenge immediately on email delivery failure in production
+        this.otpStore.delete(storeKey);
+        this.removeChallengeFromDb(user.id, requestedRole);
 
         return {
           success: false,

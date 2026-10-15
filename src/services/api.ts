@@ -11,7 +11,7 @@ import {
   CapturedStudent,
 } from '../types';
 
-const API_BASE = '/api';
+const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/+$/, '');
 
 class ApiService {
   private token: string | null = null;
@@ -64,15 +64,45 @@ class ApiService {
       headers['x-demo-preview'] = 'true';
     }
 
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      ...options,
-      headers,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}${endpoint}`, {
+        ...options,
+        headers,
+      });
+    } catch (networkError: unknown) {
+      const err = networkError as Error;
+      console.error(`[API Network Error] ${options.method || 'GET'} ${endpoint}:`, err);
+      throw new Error(
+        'Unable to connect to Sentinel Campus server. Please check your network connection or verify that the server is running on localhost:5000.'
+      );
+    }
 
-    const data = await response.json();
+    const contentType = response.headers.get('content-type') || '';
+    let data: any = null;
+
+    if (contentType.includes('application/json')) {
+      try {
+        data = await response.json();
+      } catch (jsonErr) {
+        console.warn(`[API JSON Parse Error] ${endpoint}:`, jsonErr);
+        data = null;
+      }
+    } else {
+      await response.text().catch(() => '');
+      if (!response.ok) {
+        throw new Error(
+          `Server returned unexpected response (${response.status} ${response.statusText || 'Error'}). Please try again or inspect server logs.`
+        );
+      }
+    }
 
     if (!response.ok) {
-      throw new Error(data.error || data.message || `Request failed with status ${response.status}`);
+      const serverError = data?.error || data?.message;
+      if (serverError) {
+        throw new Error(serverError);
+      }
+      throw new Error(`Request failed with status ${response.status}`);
     }
 
     return data;
