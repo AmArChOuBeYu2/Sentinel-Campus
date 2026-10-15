@@ -442,7 +442,39 @@ router.post('/sync', (req: Request, res: Response) => {
       ? item.capturedAt.split('T')[0]
       : getCampusLocalDate();
     const checkpointType = item.checkpointType || 'entry';
-    const sessionType = item.sessionType || (itemUser.role === 'staff' ? 'daily_staff' : 'class_session');
+    const sessionType = item.sessionType || (itemUser.role === 'staff' ? 'daily_staff' : itemUser.role === 'teacher' ? 'daily_personal' : 'class_session');
+
+    // Role Authorization Check: Restrict sessionType by authoritative user role
+    if (itemUser.role === 'teacher') {
+      if (item.sessionType === 'daily_staff' || item.sessionType === 'class_session') {
+        results.push({
+          idempotencyKey: item.idempotencyKey,
+          status: 'rejected',
+          reason: 'Role authorization error: Teacher accounts cannot submit daily_staff or student class_session attendance.',
+        });
+        continue;
+      }
+    }
+    if (itemUser.role === 'staff') {
+      if (item.sessionType === 'class_session') {
+        results.push({
+          idempotencyKey: item.idempotencyKey,
+          status: 'rejected',
+          reason: 'Role authorization error: Staff accounts cannot submit student class_session attendance.',
+        });
+        continue;
+      }
+    }
+    if (itemUser.role === 'student') {
+      if (item.sessionType === 'daily_staff') {
+        results.push({
+          idempotencyKey: item.idempotencyKey,
+          status: 'rejected',
+          reason: 'Role authorization error: Student accounts cannot submit daily_staff attendance.',
+        });
+        continue;
+      }
+    }
 
     // Duplicate check
     const existing = db.findDuplicateAttendance(
@@ -536,7 +568,9 @@ router.get('/gate-status', (req: Request, res: Response) => {
   return res.json({
     success: true,
     attendanceRequired: true,
-    gateUnlocked: todayAttendanceConfirmed,
+    // Security Enforcement: An existing attendance record alone NEVER unlocks the session gate.
+    // Fresh live facial verification is mandatory for every session.
+    gateUnlocked: false,
     isEnrolled,
     enrollmentNote: user.enrollmentNote,
     todayAttendanceConfirmed,

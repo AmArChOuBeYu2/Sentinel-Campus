@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../db';
 import { getAuthenticatedUser } from './auth';
+import { referenceIdentityService } from '../services/referenceIdentityService';
 
 const router = Router();
 
@@ -94,6 +95,24 @@ router.post('/', (req: Request, res: Response) => {
     return res.status(400).json({
       success: false,
       error: `Fabricated or unpopulated vector: magnitude (${magnitude.toFixed(2)}) is outside plausible face embedding range [0.3, 2.0].`,
+    });
+  }
+
+  // Zero-Trust Reference Identity Binding & Cross-Identity Collision Validation
+  const candidateCheck = referenceIdentityService.validateEnrollmentCandidate(targetUser, descriptor, {
+    isAdminSession: currentUser.role === 'admin',
+  });
+
+  if (!candidateCheck.valid) {
+    db.addAuditLog(currentUser.id, 'BIOMETRIC_ENROLLMENT_REJECTED', 'FAILURE', {
+      targetUserId: targetId,
+      code: candidateCheck.code,
+      reason: candidateCheck.error,
+    });
+    return res.status(403).json({
+      success: false,
+      code: candidateCheck.code,
+      error: candidateCheck.error,
     });
   }
 

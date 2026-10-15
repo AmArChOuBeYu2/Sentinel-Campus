@@ -1235,13 +1235,14 @@ class Database {
       }
     }
 
-    // 2. Personal Presence Gate Deduplication: Exactly one confirmed daily_personal per user per campus-local date
-    if (event.sessionType === 'daily_personal' && event.status === 'confirmed') {
+    // 2. Personal Presence Gate Deduplication: Exactly one confirmed personal attendance (daily_personal or daily_staff) per user per campus-local date
+    const isPersonalDaily = event.sessionType === 'daily_personal' || event.sessionType === 'daily_staff';
+    if (isPersonalDaily && event.status === 'confirmed') {
       const existingDaily = this.data.attendance.find(
         (a) =>
           a.userId === event.userId &&
           a.eventDate === event.eventDate &&
-          a.sessionType === 'daily_personal' &&
+          (a.sessionType === 'daily_personal' || a.sessionType === 'daily_staff') &&
           a.status === 'confirmed'
       );
       if (existingDaily) {

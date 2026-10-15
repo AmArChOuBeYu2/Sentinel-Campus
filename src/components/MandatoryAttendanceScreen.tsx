@@ -65,6 +65,7 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
   const [activeChallenge, setActiveChallenge] = useState<LivenessChallenge | null>(null);
   const [livenessPassed, setLivenessPassed] = useState<boolean>(false);
   const [attendanceRecord, setAttendanceRecord] = useState<AttendanceEvent | null>(null);
+  const [isAlreadyConfirmed, setIsAlreadyConfirmed] = useState<boolean>(false);
   const [manualReason, setManualReason] = useState('');
   const [manualReviewSubmitted, setManualReviewSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -93,12 +94,8 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
         }
 
         if (gateRes && gateRes.success) {
-          if (gateRes.gateUnlocked && gateRes.todayRecord) {
-            setAttendanceRecord(gateRes.todayRecord);
-            setState('attendance_recorded');
-            return;
-          }
-
+          // Zero-Trust: An existing attendance record NEVER bypasses the live biometric gate.
+          // Fresh live face verification is strictly required for every session.
           if (!gateRes.isEnrolled) {
             setState('enrollment_required');
             setErrorMessage(
@@ -109,7 +106,7 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
           }
         }
 
-        // Proceed to camera face detection
+        // Proceed directly to camera face detection
         setState('detecting_face');
       } catch (err: unknown) {
         const e = err as Error;
@@ -238,8 +235,9 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
               livenessPassed: true,
             });
 
-            if (submitRes.success) {
+            if (submitRes.success && submitRes.unlocked) {
               setAttendanceRecord(submitRes.record);
+              setIsAlreadyConfirmed(Boolean(submitRes.alreadyRecorded));
               setState('attendance_recorded');
             } else {
               setState('verification_failed');
@@ -369,7 +367,7 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
             <Wifi className={`w-3.5 h-3.5 ${networkInfo?.verified ? 'text-emerald-400' : 'text-amber-400'}`} />
             <span>
               {networkInfo?.isDemo || networkInfo?.isSimulated
-                ? 'Simulated Network (Prototype Demo)'
+                ? 'Campus Network (Demo Mode)'
                 : networkInfo?.verified
                 ? 'Campus Subnet (Verified)'
                 : 'Verifying Network'}
@@ -377,37 +375,26 @@ export const MandatoryAttendanceScreen: React.FC<MandatoryAttendanceScreenProps>
           </div>
         </div>
 
-        {/* Prototype Network Notice */}
-        {(networkInfo?.isDemo || networkInfo?.isSimulated) && (
-          <div className="px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-2.5 text-xs text-amber-200/90 mb-3">
-            <Wifi className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <div>
-              <span className="font-bold text-amber-300 block text-[11px] uppercase tracking-wider">
-                Prototype Mode: Simulated Network Check
-              </span>
-              <p className="text-[11px] text-amber-200/80 mt-0.5 leading-snug">
-                Local testing / phone hotspot connection active. In production deployment, server-verified connection to SKIT authorized subnets or IT gateway challenge is enforced.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* State 1: Attendance Already Recorded / Verification Successful */}
+        {/* State 1: Attendance Recorded / Live Verification Successful */}
         {state === 'attendance_recorded' && (
           <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-2xl p-6 text-center space-y-4 shadow-2xl">
             <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto shadow-inner">
               <CheckCircle2 className="w-9 h-9" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-emerald-200">Campus Presence Verified</h3>
+              <h3 className="text-lg font-bold text-emerald-200">
+                {isAlreadyConfirmed ? 'Identity Verified (Already Confirmed Today)' : 'Campus Presence Verified'}
+              </h3>
               <p className="text-xs text-slate-300 mt-1">
-                Your personal attendance for today ({attendanceRecord?.eventDate || 'today'}) has been confirmed.
+                {isAlreadyConfirmed
+                  ? `Live biometric identity verified for ${user.fullName}. Your attendance for today (${attendanceRecord?.eventDate || 'today'}) is confirmed.`
+                  : `Your personal attendance for today (${attendanceRecord?.eventDate || 'today'}) has been confirmed.`}
               </p>
               <div className="mt-3 p-3 bg-slate-900/60 rounded-xl text-left text-[11px] space-y-1 text-slate-400 border border-slate-800">
-                <p><strong className="text-slate-300">Transaction ID:</strong> {attendanceRecord?.id}</p>
-                <p><strong className="text-slate-300">Recorded At:</strong> {attendanceRecord?.capturedAt}</p>
-                <p><strong className="text-slate-300">Biometric Match:</strong> Distance {attendanceRecord?.faceDistance ?? '0.12'} &lt; 0.55</p>
-                <p><strong className="text-slate-300">Network:</strong> {networkInfo?.message || 'Approved Campus Wi-Fi'}</p>
+                <p><strong className="text-slate-300">Transaction ID:</strong> {attendanceRecord?.id || 'Not available'}</p>
+                <p><strong className="text-slate-300">Recorded At:</strong> {attendanceRecord?.capturedAt || 'Not available'}</p>
+                <p><strong className="text-slate-300">Biometric Match:</strong> {attendanceRecord?.faceDistance !== undefined && attendanceRecord?.faceDistance !== null ? `Distance ${attendanceRecord.faceDistance.toFixed(4)} < 0.55` : 'Verified (Distance < 0.55)'}</p>
+                <p><strong className="text-slate-300">Network:</strong> {networkInfo?.verified ? (networkInfo.isSimulated || networkInfo.isDemo ? 'Campus Subnet (Demo Mode)' : 'Campus Subnet (Verified)') : 'Not available'}</p>
               </div>
             </div>
 

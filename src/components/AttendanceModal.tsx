@@ -377,6 +377,43 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
       }
     } catch (err: unknown) {
       const e = err as Error;
+      const isNetworkError =
+        !navigator.onLine ||
+        e.message?.includes('Failed to fetch') ||
+        e.message?.includes('NetworkError') ||
+        e.message?.includes('network') ||
+        e.message?.includes('ECONNREFUSED');
+
+      if (isNetworkError) {
+        // Automatic fallback: Queue to offline store on network drop
+        try {
+          await offlineSyncService.queueSubmission({
+            idempotencyKey,
+            userId: user.id,
+            userName: user.fullName,
+            userRole: user.role,
+            identifierCode: user.identifierCode,
+            sessionType,
+            sessionId,
+            checkpointType,
+            latitude: geoResult.latitude,
+            longitude: geoResult.longitude,
+            locationAccuracy: geoResult.accuracy,
+            faceDescriptor: descriptor,
+            capturedAt,
+            presenceKey: sessionType === 'class_session' ? presenceKey : undefined,
+          });
+
+          setIsQueuedOffline(true);
+          setIsSuccess(true);
+          stopCamera();
+          setStep('result');
+          return;
+        } catch {
+          // If queuing fails, fall through to error message
+        }
+      }
+
       setIsSuccess(false);
       setErrorMessage(e.message || 'Server attendance verification failed.');
       stopCamera();
@@ -652,22 +689,22 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
             <div className="py-6 space-y-5 text-center">
               {isSuccess ? (
                 <>
-                  <div className="w-16 h-16 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto shadow-xl shadow-emerald-500/10">
-                    <CheckCircle2 className="w-10 h-10" />
+                  <div className={`w-16 h-16 rounded-full ${isQueuedOffline ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 shadow-amber-500/10' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-emerald-500/10'} border flex items-center justify-center mx-auto shadow-xl`}>
+                    {isQueuedOffline ? <AlertTriangle className="w-10 h-10" /> : <CheckCircle2 className="w-10 h-10" />}
                   </div>
 
                   <div>
-                    <h4 className="text-lg font-bold text-white tracking-tight">
-                      {isQueuedOffline ? 'Attendance Queued (Offline)' : 'Attendance Confirmed!'}
+                    <h4 className={`text-lg font-bold ${isQueuedOffline ? 'text-amber-300' : 'text-white'} tracking-tight`}>
+                      {isQueuedOffline ? 'Attendance Queued (Offline - Pending Verification)' : 'Attendance Confirmed!'}
                     </h4>
                     <p className="text-xs text-slate-300 mt-1 max-w-sm mx-auto">
                       {isQueuedOffline
-                        ? 'Your live biometric capture and GPS coordinates have been securely saved to the local offline queue. It will be verified by the server once connectivity is restored.'
+                        ? 'Your live biometric capture and GPS coordinates have been saved to the local offline queue with pending status. Attendance is not confirmed until verified by the campus server upon connectivity restoration.'
                         : `Successfully verified and recorded on the campus master ledger for ${user.fullName}.`}
                     </p>
                   </div>
 
-                  {confirmedRecord && (
+                  {confirmedRecord && !isQueuedOffline && (
                     <div className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 text-left text-xs space-y-1.5 max-w-sm mx-auto">
                       <div className="flex justify-between text-slate-400">
                         <span>Event ID:</span>
@@ -698,12 +735,14 @@ export const AttendanceModal: React.FC<AttendanceModalProps> = ({
 
                   <button
                     onClick={() => {
-                      onSuccess(confirmedRecord || undefined);
+                      if (!isQueuedOffline && confirmedRecord) {
+                        onSuccess(confirmedRecord);
+                      }
                       onClose();
                     }}
-                    className="w-full py-2.5 rounded-xl bg-emerald-500 text-slate-950 font-bold text-xs hover:bg-emerald-400 transition cursor-pointer"
+                    className={`w-full py-2.5 rounded-xl ${isQueuedOffline ? 'bg-amber-500 hover:bg-amber-400' : 'bg-emerald-500 hover:bg-emerald-400'} text-slate-950 font-bold text-xs transition cursor-pointer`}
                   >
-                    Done
+                    {isQueuedOffline ? 'Acknowledge (Pending Sync)' : 'Done'}
                   </button>
                 </>
               ) : (

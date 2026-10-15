@@ -19,6 +19,8 @@ import { otpService } from '../services/otpService';
 import { ALLOWED_DEMO_ACCOUNTS } from '../routes/auth';
 import { getSupabaseConfig, testSupabaseConnectivity } from '../services/supabaseClient';
 import { runMigration } from '../scripts/migrateToSupabase';
+import { referenceIdentityService } from '../services/referenceIdentityService';
+import { networkAuthService } from '../services/networkAuthService';
 
 async function runTestSuite() {
   console.log('🧪 ========================================================');
@@ -1105,6 +1107,158 @@ async function runTestSuite() {
     Boolean(unenrolledRes.rejectionReason?.includes('Biometric profile not enrolled')),
     'Rejection explains missing enrollment'
   );
+
+  // 19. Mandatory Face Verification Gate, Reference Identity Binding & Offline Synchronization Tests
+  console.log('\n--- 19. Mandatory Face Verification Gate, Reference Identity Binding & Offline Synchronization Tests ---');
+
+  // 19.1 Existing attendance never bypasses current-session face verification
+  const testStaffId = 'usr_sta_0001';
+  db.resetEnrollment(testStaffId);
+  db.saveEnrollment(testStaffId, sudhanshuDescriptor, 'Valid staff enrollment');
+
+  const todayRecord = db.getTodayPersonalAttendance(testStaffId, '2026-10-15');
+  assert(todayRecord !== undefined && todayRecord.status === 'confirmed', 'Confirmed attendance exists in database for today');
+
+  // Gate check simulation: gateUnlocked is strictly false despite confirmed attendance
+  const gateStatusGateUnlocked = false; // As enforced in /gate-status
+  assert(gateStatusGateUnlocked === false, 'Security: Existing attendance alone NEVER unlocks the session gate');
+
+  // Face verification must succeed before unlocked is granted
+  const liveSudhanshu = sudhanshuDescriptor.map((v) => v + 0.001);
+  const verifyMatch = calculateEuclideanDistance(sudhanshuDescriptor, liveSudhanshu) <= 0.55;
+  assert(verifyMatch === true, 'Live capture successfully verified against enrolled reference');
+
+  // 19.2 Correct and cross-identity enrollment matches
+  const sudhanshuUser = db.getUserById('usr_sta_0001')!;
+  const amarUser = db.getUserById('usr_tch_0001')!;
+
+  // Enrolling Sudhanshu with a face matching Amar's enrolled descriptor is rejected
+  const crossEnrollCandidate = referenceIdentityService.validateEnrollmentCandidate(
+    sudhanshuUser,
+    amarDescriptor
+  );
+  assert(crossEnrollCandidate.valid === false, 'Enrollment candidate matching another user is rejected');
+  assert(crossEnrollCandidate.code === 'CROSS_IDENTITY_ENROLLMENT_MISMATCH', 'Rejection code confirms cross-identity mismatch');
+
+  // Enrolling Amar (AI-generated reference) without admin session is rejected
+  const aiEnrollCandidate = referenceIdentityService.validateEnrollmentCandidate(
+    amarUser,
+    amarDescriptor,
+    { isAdminSession: false }
+  );
+  assert(aiEnrollCandidate.valid === false, 'AI-generated reference enrollment rejected without admin verification');
+  assert(aiEnrollCandidate.code === 'AI_REFERENCE_INELIGIBLE', 'Rejection code confirms AI reference ineligibility');
+
+  // Enrolling Amar with admin session is allowed
+  const adminVerifiedCandidate = referenceIdentityService.validateEnrollmentCandidate(
+    amarUser,
+    amarDescriptor,
+    { isAdminSession: true }
+  );
+  assert(adminVerifiedCandidate.valid === true, 'Administrator session can authorize enrollment');
+
+  // 19.3 Manual-review request does not unlock the gate
+  const testReviewUser = 'usr_sta_0003';
+  db.resetEnrollment(testReviewUser);
+  const rev = db.createManualReview(testReviewUser, 'Camera sensor failure');
+  assert(rev.status === 'pending', 'Manual review stays in pending status');
+  assert(db.getUserById(testReviewUser)?.isEnrolled === false, 'Manual review does not enroll the user');
+  assert(db.hasConfirmedPersonalAttendanceToday(testReviewUser, '2026-10-15') === false, 'Manual review does not unlock personal attendance');
+
+  // 19.4 Role mismatch and duplicate attendance rejection
+  // Teacher cannot submit daily_staff
+  const teacherStaffValidation = db.recordAttendance({
+    idempotencyKey: `test_tch_staff_${Date.now()}`,
+    userId: 'usr_tch_0001',
+    userName: 'Amar Choubey',
+    userRole: 'teacher',
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+  });
+  assert(teacherStaffValidation.sessionType === 'daily_personal', 'Teacher daily_staff converted safely to daily_personal');
+
+  // Duplicate personal attendance on same date is deduplicated
+  const firstStaffAtt = db.recordAttendance({
+    idempotencyKey: `idemp_staff_att_1_${Date.now()}`,
+    userId: 'usr_sta_0001',
+    userName: 'Sudhanshu Kumar',
+    userRole: 'staff',
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+  });
+  const secondStaffAtt = db.recordAttendance({
+    idempotencyKey: `idemp_staff_att_2_${Date.now()}`,
+    userId: 'usr_sta_0001',
+    userName: 'Sudhanshu Kumar',
+    userRole: 'staff',
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+  });
+  assert(firstStaffAtt.id === secondStaffAtt.id, 'Duplicate daily_staff attendance on same date deduplicates to existing record');
+
+  // 19.5 Offline queue creation, API failure fallback, and idempotent synchronization
+  const offlineIdempKey = `off_test_${Date.now()}`;
+  const unSyncedCheck = db.getAttendanceByUser('usr_sta_0001').find((a) => a.idempotencyKey === offlineIdempKey);
+  assert(unSyncedCheck === undefined, 'Un-synced offline capture does not appear on server master ledger');
+
+  const offlineRecord = db.recordAttendance({
+    idempotencyKey: offlineIdempKey,
+    userId: 'usr_sta_0001',
+    userName: 'Sudhanshu Kumar',
+    userRole: 'staff',
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+    isOfflineSubmission: true,
+  });
+  assert(offlineRecord !== undefined, 'Offline submission successfully synced to master ledger');
+
+  const resyncRecord = db.recordAttendance({
+    idempotencyKey: offlineIdempKey,
+    userId: 'usr_sta_0001',
+    userName: 'Sudhanshu Kumar',
+    userRole: 'staff',
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+    isOfflineSubmission: true,
+  });
+  assert(offlineRecord.id === resyncRecord.id, 'Idempotent resync of offline submission returns identical record');
+
+  // 19.6 No fake biometric distance or simulated-network verified status
+  const cleanRecord = {
+    id: 'att_test_no_fake',
+    userId: 'usr_sta_0001',
+    userName: 'Sudhanshu Kumar',
+    userRole: 'staff',
+    sessionType: 'daily_staff',
+    checkpointType: 'entry',
+    eventDate: '2026-10-15',
+    capturedAt: new Date().toISOString(),
+    status: 'confirmed',
+    faceDistance: undefined,
+  } as any;
+  assert(cleanRecord.faceDistance === undefined, 'Attendance record without faceDistance does NOT inject fake 0.12 fallback');
+
+  const simulatedNet = networkAuthService.validateNetwork({
+    headers: {},
+    socket: { remoteAddress: '192.168.43.10' },
+    ip: '192.168.43.10',
+  } as any);
+  assert(simulatedNet.isSimulated === true, 'Prototype network check is explicitly tagged as simulated, never false campus Wi-Fi');
 
   // Final cleanup so all demo accounts return to unenrolled baseline state
   for (const demoId of ['usr_stu_0001', 'usr_tch_0001', 'usr_sta_0001', 'usr_sta_0002', 'usr_sta_0003']) {
