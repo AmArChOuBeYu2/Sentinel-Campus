@@ -80,7 +80,9 @@ function AppContent() {
         const meRes = await api.getMe();
         if (meRes.success && meRes.user) {
           setUser(meRes.user);
-          if (meRes.user.role === 'admin') {
+          // Teachers can access their portal after authenticated login.
+          // Personal biometric attendance remains a separate action, not a login prerequisite.
+          if (meRes.user.role === 'admin' || meRes.user.role === 'teacher') {
             setGateUnlocked(true);
           } else {
             const gateRes = await api.getGateStatus().catch(() => null);
@@ -149,6 +151,9 @@ function AppContent() {
       if (res.user.role === 'admin') {
         setGateUnlocked(true);
         navigate('/admin');
+      } else if (res.user.role === 'teacher') {
+        setGateUnlocked(true);
+        navigate('/');
       } else {
         setGateUnlocked(false);
         navigate('/verify-presence');
@@ -225,6 +230,10 @@ function AppContent() {
                   if (authedUser.role === 'admin') {
                     setGateUnlocked(true);
                     navigate('/admin');
+                  } else if (authedUser.role === 'teacher') {
+                    // Teacher login is OTP/credential authenticated; do not require face analysis to enter the portal.
+                    setGateUnlocked(true);
+                    navigate('/');
                   } else {
                     setGateUnlocked(false);
                     navigate('/verify-presence');
